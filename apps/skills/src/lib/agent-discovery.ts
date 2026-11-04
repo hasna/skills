@@ -4,13 +4,14 @@ import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
-import type { IntegrationAgent } from "./agent-adapters.js";
+import { parseHermesConfig, assertHermesEnvironment, hermesHookDefinitions } from "./agent-hermes.js";
+import { renderAgentHookCommand, type IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory, type DiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 import { pluginExecutableDigest } from "./plugin-projection-store.js";
 import { captureCodexSettingsV6, codexSettingsToleratesScreenReaderReceipt, codexSettingsWitnessMatch, type CodexSettingsWitnessMatch } from "./codex-settings-witness.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource } from "./codex-hook-mcp-dependencies.js";
+import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { CLAUDE_ORPHAN_MARKER_MODE, hashClaudePluginCacheOrphanMarker, isClaudePluginCacheOrphanMarker } from "./claude-plugin-cache-marker.js";
 import { NativeDiscoveryWitnessChange, witnessChanged, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
@@ -1015,7 +1016,7 @@ export function resolveAgentDiscovery(options: DiscoveryOptions): AgentDiscovery
  * while current supported controls are re-derived even when old settings or
  * directory witnesses are stale. Non-enumerable executable inputs still need
  * their existing review. No witness, policy or enrollment is written. */
-export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): readonly string[] {
+export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string; managedHook?: ManagedBridgeHook }): readonly string[] {
   if (options.nativeHome !== undefined && (!["claude", "codex"].includes(options.agent) || !isAbsolute(options.nativeHome))) throw new Error("Unsupported native discovery exclusion home");
   const current = resolveDiscovery(options, options);
   const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
@@ -1058,9 +1059,123 @@ export function nativeDiscoveryAliasTargets(roots: readonly string[], home: stri
   return [...targets];
 }
 
-function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
+/** The Skills bridge command and selection profile the policy records for an
+ * agent (`bridge.commands` and `bridge.profiles`), from which hook install
+ * renders its managed hook commands. */
+export interface ManagedBridgeHook { command: string; profile: string; supervisor?: { path: string; runtime: string; sha256: string } }
+/** Whether `hooks` hold only the managed Skills bridge entries hook install
+ * writes (agent-integration configureHooks), each with exactly the command
+ * renderAgentHookCommand produces for its event from an absolute recorded
+ * command:
+ *   - Gemini: one entry per event (BeforeAgent, SessionStart, BeforeTool) with
+ *     one command handler, timeout 15000, and matcher `activate_skill` only on
+ *     BeforeTool;
+ *   - Cursor: one `{ command, timeout: 15 }` entry per event
+ *     (beforeSubmitPrompt, sessionStart). */
+function hooksAreManagedBridge(agent: "gemini" | "cursor", hooks: unknown, managed: ManagedBridgeHook): boolean {
+  const table = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === "object" && !Array.isArray(value));
+  const exactKeys = (value: Record<string, any>, keys: string[]): boolean => Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+  if (!table(hooks) || typeof managed.command !== "string" || !isAbsolute(managed.command)) return false;
+  const events = agent === "gemini" ? ["BeforeAgent", "SessionStart", "BeforeTool"] : ["beforeSubmitPrompt", "sessionStart"];
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!events.includes(event) || !Array.isArray(entries) || entries.length !== 1) return false;
+    let expected: string;
+    try { expected = renderAgentHookCommand(managed.command, agent, managed.profile, event); } catch { return false; }
+    const entry = entries[0];
+    if (!table(entry)) return false;
+    if (agent === "cursor") {
+      if (!exactKeys(entry, ["command", "timeout"]) || entry.timeout !== 15 || entry.command !== expected) return false;
+      continue;
+    }
+    if (!exactKeys(entry, event === "BeforeTool" ? ["hooks", "matcher"] : ["hooks"]) || event === "BeforeTool" && entry.matcher !== "activate_skill"
+      || !Array.isArray(entry.hooks) || entry.hooks.length !== 1) return false;
+    const hook = entry.hooks[0];
+    if (!table(hook) || !exactKeys(hook, ["command", "timeout", "type"]) || hook.type !== "command" || hook.timeout !== 15000 || hook.command !== expected) return false;
+  }
+  return true;
+}
+
+/** Whether a single-file Sumi plugin loads nothing but Node builtins: every
+ * static `from`/side-effect import names a `node:` module, and every
+ * `import(`/`require(` call takes a `node:` string literal. Anything it cannot
+ * read this way (a computed specifier, a template literal, a relative file or
+ * a package) counts as loading another file. */
+function sumiPluginLoadsOnlyBuiltins(text: string): boolean {
+  for (const match of text.matchAll(/\b(?:import|require)\s*\(\s*(.?)/g)) {
+    const rest = text.slice(match.index! + match[0].length - match[1]!.length);
+    if (!/^(['"])node:[A-Za-z0-9_/.-]+\1/.test(rest)) return false;
+  }
+  for (const match of text.matchAll(/\b(?:from|import)\s*(['"])([^'"]*)\1/g)) if (!match[2]!.startsWith("node:")) return false;
+  return true;
+}
+
+const CODEX_MARKETPLACE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** Codex controls the V7 projection binds (for hook admission) that add no
+ * native skill root, so authoring exclusion needs no review for them:
+ *   - `mcp_servers`, when every row is a local stdio server under the shared
+ *     Codex contract (`isCodexLocalStdioMcpServer`, the same rows
+ *     codex-settings-v3 to v6 treat as outside native skill discovery). Codex
+ *     loads skills from its skill roots, `skills.config` and enabled plugins,
+ *     never from an MCP server, and a row's command, args and cwd name what
+ *     the server runs, not where Codex looks for skills. The reserved Apps
+ *     server, HTTP or OAuth servers, unknown fields and malformed rows keep
+ *     the whole control unresolved.
+ *   - `agents`, when it holds only scalar thread settings (numbers and
+ *     booleans). A role table can load a `config_file` layer that adds skills,
+ *     plugins, hooks or instructions, so any table or string keeps refusing.
+ * Hooks, including `mcp_tool` handlers, keep their own review requirements. */
+function codexRootFreeControls(config: Record<string, any>): string[] {
+  const table = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date));
+  const adapted: string[] = [];
+  const servers = config.mcp_servers;
+  if (table(servers) && Object.keys(servers).length <= AGENT_POLICY_LIMITS.discoveryRoots
+    && Object.entries(servers).every(([name, row]) => name !== "codex_apps" && name !== "_codex_apps" && isCodexLocalStdioMcpServer(name, row))) adapted.push("mcp_servers");
+  const agents = config.agents;
+  if (table(agents) && Object.keys(agents).length <= AGENT_POLICY_LIMITS.fields
+    && Object.values(agents).every(value => typeof value === "boolean" || typeof value === "number" && Number.isFinite(value))) adapted.push("agents");
+  return adapted;
+}
+
+/** Strict reader for one Codex plugin hook declaration (`hooks/hooks.json`, a
+ * manifest `hooks` target, or an inline manifest `hooks` object): the
+ * `{ description?, hooks: { <event>: [{ matcher?, hooks: [handler] }] } }` layout with the
+ * command and mcp_tool handler fields of the Codex hook contract. Returns null
+ * for anything else, so a caller can fail closed. */
+const CODEX_HOOK_EVENTS: ReadonlySet<string> = new Set(["PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "Interrupt"]);
+function codexPluginHookHandlers(value: unknown): { commands: number; servers: Set<string> } | null {
+  const table = (item: unknown): item is Record<string, any> => Boolean(item && typeof item === "object" && !Array.isArray(item));
+  const identifier = (item: unknown): item is string => typeof item === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(item);
+  const text = (item: unknown): boolean => typeof item === "string" && item.length <= AGENT_POLICY_LIMITS.pathCharacters && !item.includes("\0");
+  if (!table(value) || !Object.keys(value).every(key => key === "hooks" || key === "description") || value.description !== undefined && !text(value.description)
+    || !table(value.hooks) || Object.keys(value.hooks).length > 32) return null;
+  const result = { commands: 0, servers: new Set<string>() };
+  for (const [event, groups] of Object.entries(value.hooks)) {
+    if (!CODEX_HOOK_EVENTS.has(event) || !Array.isArray(groups) || groups.length > 32) return null;
+    for (const group of groups) {
+      if (!table(group) || !Object.keys(group).every(key => key === "hooks" || key === "matcher") || group.matcher !== undefined && !text(group.matcher)
+        || !Array.isArray(group.hooks) || group.hooks.length > 32) return null;
+      for (const handler of group.hooks) {
+        if (!table(handler) || handler.timeout !== undefined && !(Number.isSafeInteger(handler.timeout) && handler.timeout >= 0)
+          || handler.statusMessage !== undefined && !text(handler.statusMessage)) return null;
+        if (handler.type === "command") {
+          if (!text(handler.command) || !handler.command || !Object.keys(handler).every(key => ["type", "command", "commandWindows", "command_windows", "timeout", "async", "statusMessage", "additionalContextLimit"].includes(key))) return null;
+          result.commands++;
+        } else if (handler.type === "mcp_tool") {
+          if (!identifier(handler.server) || !identifier(handler.tool) || handler.input !== undefined && !table(handler.input)
+            || !Object.keys(handler).every(key => ["type", "server", "tool", "input", "timeout", "statusMessage"].includes(key))) return null;
+          result.servers.add(handler.server);
+        } else return null;
+      }
+    }
+  }
+  return result;
+}
+
+function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string; managedHook?: ManagedBridgeHook }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
+  const sumiLocalPluginTexts = new Map<string, string>();
   const budget = discoveryByteBudget();
   let remainingEntries = AGENT_POLICY_LIMITS.discoveryDirectoryEntries;
   const entries = (path: string): string[] => {
@@ -1130,12 +1245,37 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const fieldKey = (key: string): string => /^[A-Za-z_$][A-Za-z0-9_$.-]{0,22}$/.test(key)
       && !/(?:sk|rk|pk)_(?:live|test)_|whsec_/i.test(key) ? JSON.stringify(key) : "[withheld field key]";
     const unsupportedFields = (names: readonly string[], label: string): never => unresolved(`unknown discovery controls have no root-exclusion adapter for ${label}${names.slice(0, 8).map(fieldKey).join(", ")}${names.length > 8 ? ", additional keys withheld" : ""} in ${quotedPath(canonical(configPath))}`);
-    const unsupportedControls = controls.filter(key => !supported[agent].includes(key));
+    // An empty OpenCode `instructions` list loads no instruction file.
+    const adapted = agent === "codex" ? codexRootFreeControls(config)
+      : agent === "opencode" && Array.isArray(config.instructions) && config.instructions.length === 0 ? ["instructions"] : [];
+    const unsupportedControls = controls.filter(key => !supported[agent].includes(key) && !adapted.includes(key));
     if (unsupportedControls.length) unsupportedFields(unsupportedControls, "");
     // A command can register roots dynamically. An existing exact or narrowed
     // settings review is required for that non-enumerable input only.
     if (config.hooks !== undefined && !object(config.hooks)) unresolved("hooks must be an object");
-    const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0;
+    // Gemini settings or Cursor hooks whose entries are exactly the Skills
+    // bridge entries `skills hook install` writes from the policy's recorded
+    // command and profile hold no opaque hook; anything else stays opaque.
+    // Hermes runs its hooks through the Skills supervisor the policy records
+    // (bridge.supervisors.hermes): the entries must be exactly the ones hook
+    // install writes for it, and the supervisor file must still be the bytes
+    // the policy recorded.
+    const managedSupervisorOnly = (): boolean => {
+      const supervisor = exclusion.managedHook?.supervisor;
+      if (agent !== "hermes" || !supervisor || typeof supervisor.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(supervisor.sha256) || !object(config.hooks)) return false;
+      let expected: ReturnType<typeof hermesHookDefinitions>;
+      try { expected = hermesHookDefinitions(supervisor); } catch { return false; }
+      for (const [event, entries] of Object.entries(config.hooks)) {
+        const want = (expected as Record<string, Record<string, unknown>>)[event];
+        if (!want || !Array.isArray(entries) || entries.length !== 1 || !object(entries[0])) return false;
+        const entry = entries[0] as Record<string, unknown>;
+        if (Object.keys(entry).sort().join("\0") !== Object.keys(want).sort().join("\0") || Object.keys(want).some(key => entry[key] !== want[key])) return false;
+      }
+      try { return hashRawDiscoveryFile(canonical(supervisor.path), budget) === supervisor.sha256; } catch { return false; }
+    };
+    const managedBridgeOnly = (agent === "gemini" || agent === "cursor") && exclusion.managedHook !== undefined && hooksAreManagedBridge(agent, config.hooks, exclusion.managedHook)
+      || managedSupervisorOnly();
+    const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0 && !managedBridgeOnly;
     let hasPluginConfigs = false, hasFunctionHookEnvironment = false;
     const verifyCurrentOpaqueSettings = (label: string): void => {
       const retained = exclusion.retained;
@@ -1211,7 +1351,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       for (const key of ["plugin", "plugins"]) if (config[key] !== undefined && (!Array.isArray(config[key]) || config[key].length > 512)) unresolved("malformed Sumi plugins");
     }
     if (agent === "hermes" && config.skills !== undefined) {
-      keys(config.skills, ["external_dirs"], "Hermes skills");
+      // A plain non-negative integer nudge interval names no skill source.
+      keys(config.skills, ["external_dirs", "creation_nudge_interval"], "Hermes skills");
+      if (config.skills.creation_nudge_interval !== undefined && !(Number.isSafeInteger(config.skills.creation_nudge_interval) && config.skills.creation_nudge_interval >= 0)) unresolved("malformed Hermes skills creation_nudge_interval");
       if (config.skills.external_dirs !== undefined) paths(typeof config.skills.external_dirs === "string" ? [config.skills.external_dirs] : config.skills.external_dirs, "Hermes external directories");
     }
     if (agent === "gemini") {
@@ -1224,8 +1366,22 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (agent === "codex") {
       for (const key of ["plugins", "marketplaces"]) if (config[key] !== undefined && !object(config[key])) unresolved(`malformed Codex ${key}`);
       for (const value of Object.values(config.plugins ?? {})) keys(value, ["enabled"], "Codex plugin registration");
-      for (const value of Object.values(config.marketplaces ?? {})) keys(value, ["source_type", "source"], "Codex marketplace registration");
-      if (config.skills !== undefined) keys(config.skills, ["config", "bundled"], "Codex skills");
+      for (const value of Object.values(config.marketplaces ?? {}) as any[]) {
+        // Codex records when it last refreshed a marketplace. The timestamp
+        // names no file, so it adds no root; any other shape still refuses.
+        keys(value, ["source_type", "source", "last_updated"], "Codex marketplace registration");
+        if (value.last_updated !== undefined && (typeof value.last_updated !== "string" || !CODEX_MARKETPLACE_TIMESTAMP.test(value.last_updated))) unresolved("malformed Codex marketplace refresh time");
+      }
+      if (config.skills !== undefined) keys(config.skills, ["config", "bundled", "native_allowed_paths"], "Codex skills");
+      if (config.skills?.native_allowed_paths !== undefined) {
+        // Not a key this Codex build reads (it ignores unknown keys), but its
+        // value is a list of skill paths. Exclude each one, as a skill root
+        // would be, so the key can only narrow where authoring may write.
+        for (const value of paths(config.skills.native_allowed_paths, "Codex native allowed skill paths")) {
+          if (!isAbsolute(value)) unresolved("relative Codex native allowed skill path");
+          const path = canonical(value); roots.add(path.endsWith(`${sep}SKILL.md`) ? dirname(path) : path);
+        }
+      }
       if (config.skills?.bundled !== undefined) {
         keys(config.skills.bundled, ["enabled"], "Codex bundled skills");
         if (typeof config.skills.bundled.enabled !== "boolean") unresolved("malformed Codex bundled skills");
@@ -1265,7 +1421,8 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (name === "skills-cli.js" && path === plugins[1]) continue;
       const target = join(path, name);
       if (!lstatSync(target).isFile()) unresolved("local plugin packages need a dedicated discovery adapter");
-      witness(target);
+      const text = witness(target);
+      if (exclusion && text !== null) sumiLocalPluginTexts.set(canonical(target), text);
     } }
     for (const root of roots) {
       safe(root);
@@ -1390,29 +1547,131 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: unique, ...(agent === "gemini" ? { builtinNames } : {}) };
   }
 
-  function plugin(root: string): void {
+  // A marketplace-defined Claude plugin may ship without a manifest and use the
+  // default layout. Exclusion accepts that absence only where the retained
+  // explicit review covers this root and still pins the manifest path absent.
+  const reviewedManifestAbsence = (root: string, manifestPath: string): boolean => {
+    const retained = exclusion?.retained;
+    if (agent !== "claude" || retained?.method !== "reviewed" || ![join(root, "skills"), root].some(path => retained.roots.includes(path))) return false;
+    const saved = retained.sources.filter(source => source.path === canonical(manifestPath) && source.hashMode === "path-bytes"
+      && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.managedPlugins === undefined);
+    return saved.length > 0 && saved.every(source => projected(source, undefined, budget) === source.sha256);
+  };
+  // Codex runs an installed plugin from its cache copy
+  // (<native home>/plugins/cache/<marketplace>/<plugin>/<version>), and an
+  // explicit review usually pins that copy's hook files, while exclusion reads
+  // the marketplace source. A source hook file whose exact bytes equal a
+  // reviewed bytes witness of the same file in an installed copy of the same
+  // plugin identity is that reviewed content.
+  const reviewedInstalledCopy = (root: string, path: string, identity: { marketplace: string; name: string }): boolean => {
+    const retained = exclusion?.retained;
+    if (agent !== "codex" || retained?.method !== "reviewed") return false;
+    const inside = relative(root, canonical(path));
+    if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return false;
+    const parent = canonical(join(nativeHome, "plugins/cache", identity.marketplace, identity.name));
+    const current = hashRawDiscoveryFile(canonical(path), budget);
+    if (current === null) return false;
+    return retained.sources.some(source => {
+      if (source.sha256 !== current || source.format !== undefined || source.fields !== undefined || ![undefined, "bytes"].includes(source.hashMode)
+        || source.managedPlugins !== undefined || source.reviewArtifact !== undefined || !source.path.startsWith(parent + sep)) return false;
+      const [version, ...rest] = source.path.slice(parent.length + 1).split(sep);
+      return Boolean(version) && version !== "." && version !== ".." && rest.join(sep) === inside;
+    });
+  };
+  // The retained review's evidence for one Codex plugin whose hooks only call
+  // local stdio MCP tools: every reviewed source and directory except the
+  // configuration (checked by its own settings rules) and the files of other
+  // plugins (other installed copies under plugins/cache and other paths below
+  // a configured marketplace source). The plugin's own files, its catalog, the
+  // files its hook servers run and every source outside plugin trees (user
+  // hooks, runtimes) must still verify. A stale witness of an unrelated plugin
+  // does not say anything about this plugin's hooks. Unusual review shapes
+  // keep the whole-review check.
+  const verifyCodexPluginHookClosure = (root: string, identity: { marketplace: string; name: string }, marketplaceSource: string, servers: ReadonlySet<string>, declarations: readonly string[]): void => {
+    const retained = exclusion!.retained!;
+    if (retained.codexSemanticCache || retained.codexInstallationInputs || retained.codexRetiredMaterializations) return verifyOpaqueClosure(declarations);
+    const within = (base: string, path: string): boolean => path === base || path.startsWith(base + sep);
+    const executables: string[] = [];
+    for (const server of servers) {
+      const row = config.mcp_servers?.[server];
+      if (server === "codex_apps" || server === "_codex_apps" || !isCodexLocalStdioMcpServer(server, row)) unresolved("plugin hook MCP server is not a configured local stdio server");
+      for (const value of [row.command, ...(row.args ?? [])] as string[]) for (const candidate of [value, value.slice(value.indexOf("=") + 1)]) {
+        if (!isAbsolute(candidate) || /[\0$]/.test(candidate) || executables.length >= AGENT_POLICY_LIMITS.discoveryRoots) continue;
+        const path = canonical(candidate);
+        if (lstatSync(path, { throwIfNoEntry: false })?.isFile()) executables.push(path);
+      }
+    }
+    const cacheRoot = canonical(join(nativeHome, "plugins/cache"));
+    const ownCache = canonical(join(nativeHome, "plugins/cache", identity.marketplace, identity.name));
+    const ownCatalog = canonical(join(marketplaceSource, ".agents/plugins/marketplace.json"));
+    const account = canonical(home);
+    const marketplaceRoots = (Object.values(config.marketplaces ?? {}) as any[])
+      .filter(market => market?.source_type === "local" && typeof market.source === "string" && isAbsolute(market.source))
+      .map(market => canonical(market.source)).filter(path => !within(path, account));
+    const otherPlugin = (path: string): boolean => !within(root, path) && !within(ownCache, path) && path !== ownCatalog && !executables.includes(path)
+      && (within(cacheRoot, path) || marketplaceRoots.some(base => within(base, path)));
+    const sources = retained.sources.filter(source => source.path !== canonical(configPath) && !otherPlugin(source.path));
+    if (sources.some(source => source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || source.reviewArtifact !== undefined
+      || ![undefined, "bytes", "path-bytes", "executable-v1"].includes(source.hashMode))) return verifyOpaqueClosure(declarations);
+    // The declarations, and their reviewed installed copies, are not evidence
+    // of what the hooks run.
+    const declared = declarations.map(path => relative(root, path));
+    const declaration = (path: string): boolean => declarations.includes(path)
+      || path.startsWith(ownCache + sep) && declared.includes(path.slice(ownCache.length + 1).split(sep).slice(1).join(sep));
+    if (!sources.some(source => !declaration(source.path) && source.sha256 !== null)) unresolved("opaque executable dependency closure is unavailable");
+    for (const source of sources) if (projected(source, undefined, budget) !== source.sha256) {
+      throw new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    }
+    verifyDiscoveryDirectories((retained.directories ?? []).filter(directory => !otherPlugin(directory.path)));
+  };
+  // An unreadable declaration returns null, which keeps the whole-review check.
+  const readCodexHookDeclaration = (text: string | null, path: string): ReturnType<typeof codexPluginHookHandlers> => {
+    if (text === null) return null;
+    try { return codexPluginHookHandlers(parseConfig(text, path)); } catch { return null; }
+  };
+  function plugin(root: string, codex?: { marketplace: string; name: string; source: string }): void {
     root = canonical(root); safe(root);
     if (exclusion) roots.add(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
-    const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined); if (raw === null) unresolved("plugin manifest missing");
-    const manifest = parseConfig(raw!, manifestPath);
+    const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined);
+    if (raw === null && !reviewedManifestAbsence(root, manifestPath)) unresolved("plugin manifest missing");
+    const manifest = raw === null ? {} : parseConfig(raw, manifestPath);
     if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
     if (manifest.hooks !== undefined || hooks !== null) {
       if (!exclusion || exclusion.retained?.method !== "reviewed") unresolved("plugin hooks require a separate no-skill-injection review");
       const required = [manifestPath, ...(hooks !== null ? [join(root, "hooks/hooks.json")] : [])];
+      // Codex authoring exclusion reads each declaration: hooks/hooks.json, a
+      // manifest target, or hooks declared inline in the manifest (as
+      // chrome@openai-bundled does). An inline declaration lives in the
+      // manifest, which is already a required reviewed source.
+      const scoped = agent === "codex" && codex !== undefined ? [] as Array<ReturnType<typeof codexPluginHookHandlers>> : undefined;
       if (manifest.hooks !== undefined) {
-        if (typeof manifest.hooks !== "string") unresolved("unsupported plugin hooks target");
-        const hook = resolve(root, manifest.hooks);
-        if (!hook.startsWith(root + sep)) unresolved("plugin hooks target escapes its root");
-        required.push(hook);
+        if (scoped && manifest.hooks && typeof manifest.hooks === "object" && !Array.isArray(manifest.hooks)) {
+          const inline = codexPluginHookHandlers(manifest.hooks);
+          if (!inline) unresolved("unsupported inline plugin hooks");
+          scoped.push(inline);
+        } else {
+          if (typeof manifest.hooks !== "string") unresolved("unsupported plugin hooks target");
+          const hook = resolve(root, manifest.hooks);
+          if (!hook.startsWith(root + sep)) unresolved("plugin hooks target escapes its root");
+          required.push(hook);
+          if (scoped) scoped.push(readCodexHookDeclaration(witness(hook), hook));
+        }
       }
+      if (scoped && hooks !== null) scoped.push(readCodexHookDeclaration(hooks, join(root, "hooks/hooks.json")));
       for (const path of required) {
         const saved = exclusion!.retained!.sources.filter(source => source.path === canonical(path)
           && source.sha256 !== null && source.format === undefined && source.fields === undefined);
-        if (!saved.length || saved.some(source => projected(source, undefined, budget) !== source.sha256)) unresolved("plugin hooks require current independently reviewed sources");
+        if (saved.length ? saved.some(source => projected(source, undefined, budget) !== source.sha256)
+          : !(scoped && reviewedInstalledCopy(root, path, codex!))) unresolved("plugin hooks require current independently reviewed sources");
       }
-      verifyOpaqueClosure(required.map(path => canonical(path)));
+      // Hooks that only call MCP tools carry structured input, never command
+      // text, so their closure is the plugin's own reviewed evidence. Command
+      // handlers and unreadable declarations keep the whole-review check.
+      if (scoped && scoped.every(item => item !== null && item.commands === 0)) {
+        verifyCodexPluginHookClosure(root, codex!, codex!.source, new Set(scoped.flatMap(item => [...item!.servers])), required.map(path => canonical(path)));
+      } else verifyOpaqueClosure(required.map(path => canonical(path)));
     }
     const commands = join(root, "commands"); safe(commands);
     if (agent === "claude" && (manifest.commands !== undefined || (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length))) unresolved("legacy command discovery requires retirement or a dedicated format adapter");
@@ -1452,7 +1711,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (catalogText === null) unresolved("marketplace catalog missing");
       const catalog = parseConfig(catalogText!, join(market.source, ".agents/plugins/marketplace.json")), matches = Array.isArray(catalog.plugins) ? catalog.plugins.filter((item: any) => item.name === name) : [];
       if (matches.length !== 1 || matches[0]?.source?.source !== "local" || typeof matches[0]?.source?.path !== "string") unresolved("plugin catalog source is missing or ambiguous");
-      plugin(resolve(market.source, matches[0].source.path));
+      plugin(resolve(market.source, matches[0].source.path), exclusion ? { marketplace, name, source: market.source } : undefined);
     }
   } else if (agent === "opencode") {
     if (witness(join(home, ".config/opencode/opencode.jsonc")) !== null || witness(join(home, ".config/opencode/config.json")) !== null) unresolved("additional config layers require review");
@@ -1461,7 +1720,17 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const localPlugins = join(home, ".config/opencode/plugins"); safe(localPlugins);
     if (lstatSync(localPlugins, { throwIfNoEntry: false }) && entries(localPlugins).some(name => name !== "skills-cli.js")) unresolved("additional local plugin hooks require review");
   } else if (agent === "sumi") {
-    if ((config.plugin?.length ?? 0) > 0 || (config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null)) unresolved("external or foreign local plugins require review");
+    // Authoring exclusion accepts a local plugin file the retained explicit
+    // review pins: the same path with a bytes witness equal to the current
+    // bytes, in a file that loads nothing beyond Node builtins. Configured
+    // plugin entries and any other source still refuse.
+    const pinnedLocalPlugin = (source: DiscoverySource): boolean => {
+      const retained = exclusion?.retained, text = sumiLocalPluginTexts.get(source.path);
+      return retained?.method === "reviewed" && text !== undefined && sumiPluginLoadsOnlyBuiltins(text) && retained.sources.some(saved => saved.path === source.path
+        && saved.sha256 === source.sha256 && saved.sha256 !== null && [undefined, "bytes"].includes(saved.hashMode)
+        && saved.format === undefined && saved.fields === undefined && saved.managedPlugins === undefined && saved.reviewArtifact === undefined);
+    };
+    if ((config.plugin?.length ?? 0) > 0 || (config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null && !pinnedLocalPlugin(source))) unresolved("external or foreign local plugins require review");
   } else if (agent === "hermes") {
     // Python entry points and bundled plugins may register prompt sections or
     // namespaced skills. Do not import them to guess their effective behavior.
