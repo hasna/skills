@@ -1254,7 +1254,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (agent === "codex") {
       for (const key of ["plugins", "marketplaces"]) if (config[key] !== undefined && !object(config[key])) unresolved(`malformed Codex ${key}`);
       for (const value of Object.values(config.plugins ?? {})) keys(value, ["enabled"], "Codex plugin registration");
-      for (const value of Object.values(config.marketplaces ?? {})) {
+      for (const value of Object.values(config.marketplaces ?? {}) as any[]) {
         // Codex records when it last refreshed a marketplace. The timestamp
         // names no file, so it adds no root; any other shape still refuses.
         keys(value, ["source_type", "source", "last_updated"], "Codex marketplace registration");
