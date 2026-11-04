@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.91
+
+- `@hasna/secrets` is an optional dependency, kept external in every build and loaded only when a vault binding needs it, so an install without access to the private package (every anonymous install since 2 November) succeeds, and a vault pointer without it refuses and names the missing package (#189).
+- `skills self-update` carries an installed `@hasna/secrets` file for file, or leaves only that optional package unresolved and installs the lock as written; any other gap still fails (#189).
+- The package ships THIRD_PARTY_NOTICES for every bundled third-party package, including code our own packages pre-bundle (#189).
+- CI installs the locked private package with a read-only token at the install step only, and the consumer gate covers installs with and without access to it (#189, folding #187).
+
 ## 0.10.90
 
 - Claude Code 2.1.314 and 2.1.316 are accepted as measured user-scope writers for a directory settings marketplace in the prospective review, as 2.1.302 was. Measured against 2.1.302 in an isolated HOME (a directory marketplace add, then install and update), all three gave the same normalized post-states and CLI JSON. Neighbouring, pre-release, build and four-part versions, and project scope, are still refused.
