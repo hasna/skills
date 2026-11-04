@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.92
+
+- Portable authoring (`skills prepare`, `port`, `new` and the corpus writers) no longer refuses a Codex `config.toml` because it has `[mcp_servers.*]` rows, scalar `[agents]` settings, `skills.native_allowed_paths` or a marketplace `last_updated` time. On 0.10.90 every station with a Codex configuration refused with `unknown discovery controls have no root-exclusion adapter for "mcp_servers"` (station01 also for `"agents"`). Authoring exclusion now treats these as adding no native skill root: a local stdio MCP row, under the same contract `codex-settings-v3` to `v6` already treat as outside native skill discovery, names what a server runs, not where Codex looks for skills; scalar `[agents]` settings name no file; a marketplace refresh time is a timestamp. `skills.native_allowed_paths` (a key this Codex build ignores) is excluded like a skill root, so it can only narrow where authoring may write. Still refused: an MCP row outside the local stdio contract (HTTP or OAuth servers, the reserved Apps server, unknown fields, more than 512 rows), an `[agents.<role>]` table or any non-scalar `[agents]` value, instruction sources, profiles and feature flags. Hooks, including `mcp_tool` handlers, keep their existing review requirements, and native admission, hook install and the live hooks are unchanged.
+- Portable authoring accepts an enabled Claude plugin installed without `.claude-plugin/plugin.json` (a marketplace-defined plugin such as `swift-lsp`) only when the retained explicit review lists its skills root (or the root itself) and still pins the manifest path absent with a `path-bytes` witness (#190). The root then uses Claude's default layout; its skills root stays excluded, hooks still need their reviewed sources and a non-empty `commands/` still refuses.
+
 ## 0.10.91
 
 - `@hasna/secrets` is an optional dependency, kept external in every build and loaded only when a vault binding needs it, so an install without access to the private package (every anonymous install since 2 November) succeeds, and a vault pointer without it refuses and names the missing package (#189).
