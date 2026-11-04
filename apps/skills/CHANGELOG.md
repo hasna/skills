@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Concurrent session starts on one station now share one profile refresh (HC-01329). The managed `SessionStart` hook already refreshed the station's cached selection profile through `skills sync --selection-profile <id>` before pinning a new session; now one session start runs that sync while the others started meanwhile wait for it, within their own five-second refresh budget, and pin the profile it activated after they started. If it did not finish, the next waiter with time left runs its own, and a waiter that runs out of budget continues from the last verified profile with the existing one-line `[SKILLS_HOOK_TIMEOUT] (stage=sync)` notice. The order is kept by a private marker beside the profile pointer, which a hook that is no longer running leaves behind for at most 30 seconds; a marker that cannot be written (a read-only sandbox, say) leaves the refresh as it was. `UserPromptSubmit`, `PreToolUse` and `SubagentStart` never refresh, and the sync child, its checks, its budget and its station-report setting are unchanged.
+- A station can set `SKILLS_SESSION_START_SYNC_MAX_AGE_MINUTES` (whole minutes, 0 to 1440) in the agent's environment to skip that refresh while its cached profile was verified more recently than that. The default, and any other value, keeps a refresh at every session start, which is also where a new session re-checks its authorization, since prompt hooks read the verified cache.
+
 ## 0.10.91
 
 - `@hasna/secrets` is an optional dependency, kept external in every build and loaded only when a vault binding needs it, so an install without access to the private package (every anonymous install since 2 November) succeeds, and a vault pointer without it refuses and names the missing package (#189).

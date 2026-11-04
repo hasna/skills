@@ -20,6 +20,7 @@ import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } 
 import { HookDiagnosticError, hookChildError, hookFailureReason, isOptionalHookContextFailure, hookUnavailableContext } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, sessionStartSyncBudget, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
+import { sessionStartRefreshDue, sessionStartSyncMaxAgeMs, tryAcquireSessionStartRefresh, waitForSessionStartRefresh } from "../../lib/session-start-refresh.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7 } from "../../lib/codex-settings-witness.js";
 import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
@@ -143,6 +144,43 @@ export function withSessionPinMigrationNotice(agent: IntegrationAgent, event: st
     const notice = takeSessionPinMigrationNotice(parsed.agentId ? `${parsed.sessionId}:${parsed.agentId}` : parsed.sessionId);
     if (notice) result.context = [notice, result.context].filter(Boolean).join("\n\n");
   } catch { /* the notice stays pending; context delivery is unaffected */ }
+}
+
+/**
+ * Refresh this station's cached profile at session start within the sync
+ * budget. One session start on the station runs the sync child; others that
+ * start meanwhile wait for it inside their own budget and use the profile it
+ * activated after they started. If it did not activate one, the next waiter
+ * with time left runs its own.
+ */
+async function refreshProfileAtSessionStart(profileId: string, deadline: number, maxAgeMs: number): Promise<void> {
+  const startedAt = Date.now();
+  const budgetEnd = startedAt + sessionStartSyncBudget(deadline - startedAt);
+  for (;;) {
+    if (Date.now() >= budgetEnd) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+    const lock = tryAcquireSessionStartRefresh(profileId);
+    if (lock) {
+      try { await runSessionStartSync(profileId, budgetEnd - Date.now()); }
+      finally { lock.release(); }
+      return;
+    }
+    if (!await waitForSessionStartRefresh(profileId, budgetEnd)) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+    if (!sessionStartRefreshDue(profileId, maxAgeMs, { verifiedSince: startedAt })) return;
+  }
+}
+
+/** The ordinary `skills sync --selection-profile <id>` child, stopped at its budget. */
+async function runSessionStartSync(profileId: string, budgetMs: number): Promise<void> {
+  if (budgetMs <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+  const self = selfSpawnCommand(["sync", "--selection-profile", profileId, "--no-station-report", "--json"]);
+  const refresh = Bun.spawn(self.command, { cwd: self.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; refresh.kill("SIGKILL"); }, budgetMs);
+  try {
+    const [stdout, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
+    if (timedOut) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+    if (status !== 0) throw hookChildError(stdout, "sync");
+  } finally { clearTimeout(timer); }
 }
 
 async function contextForHook(agent: IntegrationAgent, input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
@@ -646,24 +684,22 @@ export function registerAgentIntegration(parent: Command): void {
           return;
         }
         if (event === "SessionStart") {
-          // Station reporting is telemetry, not profile authorization. Keep
-          // it on explicit sync, outside the blocking lifecycle path. The
-          // refresh is bounded so verified context keeps its share of the
-          // window. A refresh that timed out or could not reach the authority
-          // is reported, and context is served from the last verified profile
-          // within its usual age bound.
+          // Only SessionStart refreshes the station profile, before its
+          // context is pinned. By default every session start refreshes, so
+          // a newly published version reaches the next session on every
+          // station and each new session re-checks its authorization; a
+          // station may set SKILLS_SESSION_START_SYNC_MAX_AGE_MINUTES to skip
+          // the refresh while its cached profile is younger than that. The
+          // refresh is the ordinary sync child, so it keeps every check sync
+          // makes. Station reporting is telemetry, not profile authorization:
+          // keep it on explicit sync, outside the blocking lifecycle path.
+          // The refresh is bounded so verified context keeps its share of
+          // the window. A refresh that timed out or could not reach the
+          // authority is reported, and context is served from the last
+          // verified profile within its usual age bound.
           try {
-            const remaining = sessionStartSyncBudget(deadline - Date.now());
-            if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
-            const self = selfSpawnCommand(["sync", "--selection-profile", selectionProfile, "--no-station-report", "--json"]);
-            const refresh = Bun.spawn(self.command, { cwd: self.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...self.env, NO_COLOR: "1" } });
-            let timedOut = false;
-            const timer = setTimeout(() => { timedOut = true; refresh.kill("SIGKILL"); }, remaining);
-            try {
-              const [stdout, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
-              if (timedOut) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
-              if (status !== 0) throw hookChildError(stdout, "sync");
-            } finally { clearTimeout(timer); }
+            const maxAgeMs = sessionStartSyncMaxAgeMs();
+            if (sessionStartRefreshDue(selectionProfile, maxAgeMs)) await refreshProfileAtSessionStart(selectionProfile, deadline, maxAgeMs);
           } catch (error) {
             // Only a refresh that did not finish or could not reach the
             // authority continues. An authorization refusal or any other
