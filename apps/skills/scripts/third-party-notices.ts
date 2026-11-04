@@ -69,7 +69,9 @@ function repositoryKey(url: string | null): string | null {
   return /^[^/]+\/[^/]+\/[^/]+$/.test(key) ? key : null;
 }
 
-const read = (path: string) => readFileSync(path, "utf8").replace(/\r\n?/g, "\n").trim() + "\n";
+// Each licence and notice file is reproduced byte for byte.
+const read = (path: string) => readFileSync(path, "utf8");
+export const RULE = "=".repeat(80);
 
 export function renderNotices(packageRoot: string): string {
   const own = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { name: string; version: string };
@@ -110,7 +112,7 @@ export function renderNotices(packageRoot: string): string {
   }
   if (missing.length) throw new Error(`Bundled packages ship no licence text and have no recorded upstream licence: ${missing.join(", ")}`);
   const keys = [...entries.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const rule = "=".repeat(80);
+  const rule = RULE;
   return [
     "THIRD-PARTY SOFTWARE NOTICES",
     "",
@@ -121,11 +123,38 @@ export function renderNotices(packageRoot: string): string {
   ].join("\n");
 }
 
+/**
+ * The 1-based line ranges of the shipped THIRD_PARTY_NOTICES entries that are
+ * byte-identical to the entries the bundled packages' own licence and notice
+ * files produce when read afresh from this package root. The release guard
+ * exempts a personal-email finding only inside these ranges. Anything it cannot
+ * read or render leaves no range, so every finding stays.
+ */
+export function verifiedNoticeLineSpans(packageRoot: string, shipped: string): Array<{ first: number; last: number }> {
+  let expected: Set<string>;
+  try { expected = new Set(renderNotices(packageRoot).split(`\n${RULE}\n`).slice(1)); } catch { return []; }
+  const parts = shipped.split(`\n${RULE}\n`);
+  const spans: Array<{ first: number; last: number }> = [];
+  let last = parts[0]!.split("\n").length;
+  for (const entry of parts.slice(1)) {
+    const first = last + 2;
+    last = first + entry.split("\n").length - 1;
+    if (expected.has(entry)) spans.push({ first, last });
+  }
+  return spans;
+}
+
+/** Drop personal-email findings in THIRD_PARTY_NOTICES that fall inside a verified entry; keep every other finding. */
+export function exemptVerifiedNoticeEmails<T extends { file: string; line: number; ruleId: string }>(findings: T[], spans: Array<{ first: number; last: number }>): T[] {
+  return findings.filter(finding => !(finding.file === NOTICES_FILE && finding.ruleId === "personal-email"
+    && spans.some(span => finding.line >= span.first && finding.line <= span.last)));
+}
+
 if (import.meta.main) {
   const packageRoot = resolve(import.meta.dir, "..");
   const at = process.argv.indexOf("--out");
   const out = at > 0 && process.argv[at + 1] ? resolve(process.argv[at + 1]!) : join(packageRoot, NOTICES_FILE);
   const text = renderNotices(packageRoot);
   writeFileSync(out, text);
-  console.log(`${relative(process.cwd(), out) || out}: ${text.split("\n").filter(line => line === "=".repeat(80)).length} bundled third-party packages`);
+  console.log(`${relative(process.cwd(), out) || out}: ${text.split(`\n${RULE}\n`).length - 1} bundled third-party packages`);
 }

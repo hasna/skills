@@ -213,7 +213,7 @@ test("normal CLI previews exact targets and does not expose private settings", a
 test("a built CLI previews and applies without credentials, hosted requests or startup state writes", async () => {
   const f = fixture(), cli = resolve(import.meta.dir, "../cli/index.tsx"), artifactRoot = join(f.root, "artifact"), home = join(f.root, "clean-home");
   fs.mkdirSync(home, { mode: 0o700 });
-  const build = await Bun.build({ entrypoints: [cli], outdir: join(artifactRoot, "bin"), target: "bun", external: ["@hasna/contracts/kernel-lock"] });
+  const build = await Bun.build({ entrypoints: [cli], outdir: join(artifactRoot, "bin"), target: "bun", external: ["@hasna/contracts/kernel-lock", "@hasna/secrets"] });
   expect(build.success).toBe(true);
   const builtCli = join(artifactRoot, "bin", "index.js"), artifactSha256 = sha(fs.readFileSync(builtCli, "utf8"));
   fs.symlinkSync(resolve(import.meta.dir, "../../node_modules"), join(artifactRoot, "node_modules"));

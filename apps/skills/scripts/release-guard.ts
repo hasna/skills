@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { applyAllowlist, scanFiles, scanPaths, toRedactedJson, type ScanAllowlistEntry, type ScanFinding } from "../src/lib/content-scan.js";
 import { decodeForScanning, looksBinary } from "../src/lib/file-bytes.js";
+import { exemptVerifiedNoticeEmails, NOTICES_FILE, verifiedNoticeLineSpans } from "./third-party-notices.js";
 import { formatInfraFindings, isGitWorkTree, scanRepositoryInfraIdentifiers } from "../src/lib/infra-identifiers.js";
 import { getPackedFiles } from "../src/lib/packlist.js";
 import { findPrivatePacklistLeaks, listPrivateSkillSlugs } from "../src/lib/public-boundary.js";
@@ -325,7 +326,14 @@ const scanAllowlist: ScanAllowlistEntry[] = [
   },
 ];
 
-const scanFindings = applyAllowlist(rawScanFindings, scanAllowlist);
+// SH-00058. THIRD_PARTY_NOTICES reproduces the bundled packages' own licence and
+// notice files, their authors' emails included. A personal-email finding there
+// is exempt only inside an entry this guard finds byte-identical to what those
+// files, read afresh here, produce. Every other rule, and any email outside a
+// verified entry, still fails.
+const noticeSpans = packedFileSet.has(NOTICES_FILE) && existsSync(join(repoRoot, NOTICES_FILE))
+  ? verifiedNoticeLineSpans(repoRoot, readFileSync(join(repoRoot, NOTICES_FILE), "utf8")) : [];
+const scanFindings = exemptVerifiedNoticeEmails(applyAllowlist(rawScanFindings, scanAllowlist), noticeSpans);
 
 if (scanFindings.length > 0) {
   console.error("Release guard failed: package-visible content contains secrets, PII, or private context.");

@@ -6,6 +6,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { privatePackageOverrides } from "./private-package-overrides.js";
+import { npmLockInstallCommand, REFUSED_OPTIONAL_PACKAGE } from "./npm-lock-install.js";
 
 // Exercise the published credential provider from an ordinary production-only
 // install. A successful CLI/SDK import cannot prove lazy vault-pointer loading.
@@ -17,9 +18,11 @@ import { privatePackageOverrides } from "./private-package-overrides.js";
 const root = resolve(import.meta.dir, "..");
 const workspace = await mkdtemp(join(tmpdir(), "skills-consumer-credentials-"));
 await chmod(workspace, 0o700);
-// A sibling, so no ancestor of the anonymous consumer holds the full consumer's @hasna/secrets.
+// Siblings, so no ancestor of one consumer holds another consumer's @hasna/secrets.
 const anonymousWorkspace = await mkdtemp(join(tmpdir(), "skills-consumer-credentials-anonymous-"));
 await chmod(anonymousWorkspace, 0o700);
+const npmWorkspace = await mkdtemp(join(tmpdir(), "skills-consumer-credentials-npm-"));
+await chmod(npmWorkspace, 0o700);
 for (let parent = dirname(workspace); ; parent = dirname(parent)) {
   assert(!existsSync(join(parent, "node_modules/@hasna/secrets")), "Consumer fixture has an ambient Secrets package ancestor");
   if (dirname(parent) === parent) break;
@@ -90,6 +93,31 @@ try {
   const anonymousRoot = await install(anonymousWorkspace, { private: true,
     dependencies: { "@hasna/skills": `file:${archive}` } }, "Anonymous production-only consumer");
   assert(!existsSync(join(anonymousWorkspace, "node_modules/@hasna/secrets/package.json")), "The anonymous consumer installed @hasna/secrets");
+  // npm consumers resolve a lock and install exactly that lock. Without access npm
+  // leaves @hasna/secrets out of the lock and npm ci refuses it, so that layout
+  // installs from the lock with npm install, as Skills' self-update does; with the
+  // locked tarball the lock is complete and npm ci installs it.
+  const installWithNpm = async (directory: string, manifest: object, label: string, expected: "ci" | "install") => {
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(join(directory, "package.json"), JSON.stringify(manifest));
+    const age = ["--min-release-age=7", ...["@hasna/skills", "@hasna/contracts", "@hasna/events", "@hasna/secrets"].map(name => `--min-release-age-exclude=${name}`)];
+    const resolved = await run([npmExecutable, "install", "--package-lock-only", "--ignore-scripts", ...age], directory, env);
+    assert.equal(resolved.status, 0, `${label} lock resolution failed`);
+    const lockText = await readFile(join(directory, "package-lock.json"), "utf8");
+    assert.equal(npmLockInstallCommand(lockText), expected, `${label}: the lock does not call for npm ${expected}`);
+    const installed = await run([npmExecutable, expected, "--ignore-scripts", ...age], directory, env);
+    assert.equal(installed.status, 0, `${label} npm ${expected} failed`);
+    assert.equal(await readFile(join(directory, "package-lock.json"), "utf8"), lockText, `${label}: npm ${expected} changed the lock`);
+    return join(directory, "node_modules/@hasna/skills");
+  };
+  const secretsCopies = (directory: string) => ["node_modules", "node_modules/@hasna/skills/node_modules"]
+    .map(at => join(directory, at, REFUSED_OPTIONAL_PACKAGE, "package.json")).filter(path => existsSync(path));
+  const anonymousNpmRoot = await installWithNpm(join(npmWorkspace, "anonymous"), { private: true,
+    dependencies: { "@hasna/skills": `file:${archive}` } }, "Anonymous npm consumer", "install");
+  assert.deepEqual(secretsCopies(join(npmWorkspace, "anonymous")), [], "The anonymous npm consumer installed @hasna/secrets");
+  // Private packages come from the locked tarballs the CI install step fetched, never with a token.
+  const accessNpmRoot = await installWithNpm(join(npmWorkspace, "with-access"), { private: true,
+    dependencies: { "@hasna/skills": `file:${archive}` }, overrides: privatePackageOverrides() }, "npm consumer with the locked tarball", "ci");
   const installedMetadata = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   const credentialDirectory = join(home, ".hasna/skills/config");
   await mkdir(credentialDirectory, { recursive: true, mode: 0o700 });
@@ -181,6 +209,17 @@ globalThis.fetch = async (input, init) => {
   await runCase("vault denial never uses a competing literal credential", false, ["vault-get"], { CREDENTIAL_PROOF_DENY: "1" });
   await runCase("an anonymous install refuses a vault pointer, naming the missing @hasna/secrets", false, [], {}, anonymousRoot,
     ["the secrets SDK (@hasna/secrets) is not installed", "A vault pointer is TERMINAL", "install it with access to it"]);
+  for (const [layout, layoutRoot] of [["anonymous", anonymousNpmRoot], ["with-access", accessNpmRoot]] as const) {
+    const version = await run([process.execPath, "--no-env-file", "--no-install", join(layoutRoot, "bin/index.js"), "--version"], resolve(layoutRoot, "../../.."), { ...childEnv, HOME: home }, 20_000);
+    assert.equal(version.status, 0, `${layout} npm consumer: skills --version failed`);
+    assert.equal(version.stdout.trim(), installedMetadata.version, `${layout} npm consumer: skills --version printed another version`);
+  }
+  await runCase("an anonymous npm install from the lock has no @hasna/secrets and refuses a vault pointer", false, [], {}, anonymousNpmRoot,
+    ["the secrets SDK (@hasna/secrets) is not installed", "A vault pointer is TERMINAL", "install it with access to it"]);
+  const accessCopies = secretsCopies(join(npmWorkspace, "with-access"));
+  assert(accessCopies.length > 0, "The npm consumer with the locked tarball has no @hasna/secrets");
+  for (const path of accessCopies) assert.equal(JSON.parse(await readFile(path, "utf8")).version, installedMetadata.optionalDependencies["@hasna/secrets"]);
+  await runCase("an npm ci install with the locked tarball has @hasna/secrets and resolves the vault pointer", true, ["vault-get", "identity", "capabilities"], {}, accessNpmRoot);
   const secretsDirectory = join(workspace, "node_modules/@hasna/secrets");
   const providerPath = relative(await realpath(workspace), await realpath(secretsDirectory));
   assert(providerPath && providerPath !== ".." && !providerPath.startsWith("../") && !isAbsolute(providerPath),
@@ -194,4 +233,5 @@ globalThis.fetch = async (input, init) => {
 } finally {
   await rm(workspace, { recursive: true, force: true });
   await rm(anonymousWorkspace, { recursive: true, force: true });
+  await rm(npmWorkspace, { recursive: true, force: true });
 }

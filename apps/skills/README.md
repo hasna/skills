@@ -1923,6 +1923,10 @@ and expiry, and injects only the declared variables into the child process.
 automatically, and an install without that access, such as an anonymous one,
 refuses vault bindings and says to install `@hasna/secrets` with access to it.
 Skills loads it only when a binding needs it; nothing else depends on it.
+Measured with npm 11.16.0 and 11.19.0: an npm install without access to
+`@hasna/secrets` can't use `npm ci` against a lock written without that access,
+because npm leaves the refused optional package out of the lock and `npm ci`
+then refuses the lock as out of sync. Use `npm install` or bun there.
 Missing, extra, stale or mismatched bindings refuse execution; a failing vault
 read never falls back to an ambient value or a local vault. Wrapping `skills run`
 in `secrets exec` alone does not bind a declared variable. Runtime controls such

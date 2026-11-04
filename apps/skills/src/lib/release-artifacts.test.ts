@@ -145,7 +145,7 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
 
     const consumerProof = run([process.execPath, "--no-env-file", join(producer, "scripts/consumer-credentials.ts"), secondArchive], producer,
       { ...env, SKILLS_PRIVATE_TARBALLS: process.env.SKILLS_PRIVATE_TARBALLS ?? "" });
-    expect(consumerProof.split("\n").filter(line => line.startsWith("PASS "))).toHaveLength(6);
+    expect(consumerProof.split("\n").filter(line => line.startsWith("PASS "))).toHaveLength(8);
     const anonymousProof = run([process.execPath, "--no-env-file", join(producer, "scripts/consumer-anonymous.ts"), secondArchive], producer, env);
     expect(anonymousProof.split("\n").filter(line => line.startsWith("PASS "))).toHaveLength(5);
 
