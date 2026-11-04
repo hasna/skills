@@ -184,7 +184,10 @@ test("current supported plugin roots are excluded and ambiguous registrations re
 test("Codex profile, MCP and instruction controls cannot bypass root exclusion", () => {
   for (const text of [
     '[profiles.test.skills]\npaths = ["/unknown"]\n',
-    '[mcp_servers.opaque]\ncommand = "opaque"\n',
+    // A local stdio MCP row adds no skill root (authoring-codex-root-free-controls
+    // .test.ts); a row outside that contract and an agent role still refuse.
+    '[mcp_servers.opaque]\nurl = "https://opaque.invalid/mcp"\n',
+    '[agents.opaque]\nconfig_file = "/unknown.toml"\n',
     'model_instructions_file = "/unknown"\n',
     '[features]\nnew_skill_discovery = true\n',
   ]) {

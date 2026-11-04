@@ -11,6 +11,7 @@ import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-byt
 import { pluginExecutableDigest } from "./plugin-projection-store.js";
 import { captureCodexSettingsV6, codexSettingsToleratesScreenReaderReceipt, codexSettingsWitnessMatch, type CodexSettingsWitnessMatch } from "./codex-settings-witness.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource } from "./codex-hook-mcp-dependencies.js";
+import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { CLAUDE_ORPHAN_MARKER_MODE, hashClaudePluginCacheOrphanMarker, isClaudePluginCacheOrphanMarker } from "./claude-plugin-cache-marker.js";
 import { NativeDiscoveryWitnessChange, witnessChanged, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
@@ -1058,6 +1059,34 @@ export function nativeDiscoveryAliasTargets(roots: readonly string[], home: stri
   return [...targets];
 }
 
+const CODEX_MARKETPLACE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** Codex controls the V7 projection binds (for hook admission) that add no
+ * native skill root, so authoring exclusion needs no review for them:
+ *   - `mcp_servers`, when every row is a local stdio server under the shared
+ *     Codex contract (`isCodexLocalStdioMcpServer`, the same rows
+ *     codex-settings-v3 to v6 treat as outside native skill discovery). Codex
+ *     loads skills from its skill roots, `skills.config` and enabled plugins,
+ *     never from an MCP server, and a row's command, args and cwd name what
+ *     the server runs, not where Codex looks for skills. The reserved Apps
+ *     server, HTTP or OAuth servers, unknown fields and malformed rows keep
+ *     the whole control unresolved.
+ *   - `agents`, when it holds only scalar thread settings (numbers and
+ *     booleans). A role table can load a `config_file` layer that adds skills,
+ *     plugins, hooks or instructions, so any table or string keeps refusing.
+ * Hooks, including `mcp_tool` handlers, keep their own review requirements. */
+function codexRootFreeControls(config: Record<string, any>): string[] {
+  const table = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date));
+  const adapted: string[] = [];
+  const servers = config.mcp_servers;
+  if (table(servers) && Object.keys(servers).length <= AGENT_POLICY_LIMITS.discoveryRoots
+    && Object.entries(servers).every(([name, row]) => name !== "codex_apps" && name !== "_codex_apps" && isCodexLocalStdioMcpServer(name, row))) adapted.push("mcp_servers");
+  const agents = config.agents;
+  if (table(agents) && Object.keys(agents).length <= AGENT_POLICY_LIMITS.fields
+    && Object.values(agents).every(value => typeof value === "boolean" || typeof value === "number" && Number.isFinite(value))) adapted.push("agents");
+  return adapted;
+}
+
 function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
@@ -1130,7 +1159,8 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const fieldKey = (key: string): string => /^[A-Za-z_$][A-Za-z0-9_$.-]{0,22}$/.test(key)
       && !/(?:sk|rk|pk)_(?:live|test)_|whsec_/i.test(key) ? JSON.stringify(key) : "[withheld field key]";
     const unsupportedFields = (names: readonly string[], label: string): never => unresolved(`unknown discovery controls have no root-exclusion adapter for ${label}${names.slice(0, 8).map(fieldKey).join(", ")}${names.length > 8 ? ", additional keys withheld" : ""} in ${quotedPath(canonical(configPath))}`);
-    const unsupportedControls = controls.filter(key => !supported[agent].includes(key));
+    const adapted = agent === "codex" ? codexRootFreeControls(config) : [];
+    const unsupportedControls = controls.filter(key => !supported[agent].includes(key) && !adapted.includes(key));
     if (unsupportedControls.length) unsupportedFields(unsupportedControls, "");
     // A command can register roots dynamically. An existing exact or narrowed
     // settings review is required for that non-enumerable input only.
@@ -1224,8 +1254,22 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (agent === "codex") {
       for (const key of ["plugins", "marketplaces"]) if (config[key] !== undefined && !object(config[key])) unresolved(`malformed Codex ${key}`);
       for (const value of Object.values(config.plugins ?? {})) keys(value, ["enabled"], "Codex plugin registration");
-      for (const value of Object.values(config.marketplaces ?? {})) keys(value, ["source_type", "source"], "Codex marketplace registration");
-      if (config.skills !== undefined) keys(config.skills, ["config", "bundled"], "Codex skills");
+      for (const value of Object.values(config.marketplaces ?? {})) {
+        // Codex records when it last refreshed a marketplace. The timestamp
+        // names no file, so it adds no root; any other shape still refuses.
+        keys(value, ["source_type", "source", "last_updated"], "Codex marketplace registration");
+        if (value.last_updated !== undefined && (typeof value.last_updated !== "string" || !CODEX_MARKETPLACE_TIMESTAMP.test(value.last_updated))) unresolved("malformed Codex marketplace refresh time");
+      }
+      if (config.skills !== undefined) keys(config.skills, ["config", "bundled", "native_allowed_paths"], "Codex skills");
+      if (config.skills?.native_allowed_paths !== undefined) {
+        // Not a key this Codex build reads (it ignores unknown keys), but its
+        // value is a list of skill paths. Exclude each one, as a skill root
+        // would be, so the key can only narrow where authoring may write.
+        for (const value of paths(config.skills.native_allowed_paths, "Codex native allowed skill paths")) {
+          if (!isAbsolute(value)) unresolved("relative Codex native allowed skill path");
+          const path = canonical(value); roots.add(path.endsWith(`${sep}SKILL.md`) ? dirname(path) : path);
+        }
+      }
       if (config.skills?.bundled !== undefined) {
         keys(config.skills.bundled, ["enabled"], "Codex bundled skills");
         if (typeof config.skills.bundled.enabled !== "boolean") unresolved("malformed Codex bundled skills");
