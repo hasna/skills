@@ -38,3 +38,21 @@ test("one changed byte inside an entry removes its exemption", () => {
 test("a package root the guard cannot render exempts nothing", () => {
   expect(verifiedNoticeLineSpans(join(root, "missing"), shipped)).toEqual([]);
 });
+
+test("third-party code one of our own packages pre-bundled is listed, and an unknown one fails the build", () => {
+  const host = mkdtempSync(join(tmpdir(), "skills-third-party-prebundled-"));
+  try {
+    mkdirSync(join(host, "bin")); mkdirSync(join(host, "node_modules", "@hasna", "fixture-host", "dist"), { recursive: true });
+    writeFileSync(join(host, "package.json"), JSON.stringify({ name: "@hasna/skills", version: "0.0.1" }));
+    writeFileSync(join(host, "bin", "index.js"), "// node_modules/@hasna/fixture-host/dist/inner.js\nexport {};\n");
+    writeFileSync(join(host, "node_modules", "@hasna", "fixture-host", "package.json"), JSON.stringify({ name: "@hasna/fixture-host", version: "1.0.0", devDependencies: { "fixture-inner": "3.0.0" } }));
+    writeFileSync(join(host, "node_modules", "@hasna", "fixture-host", "dist", "inner.js"), "// ../../dependency-code/node_modules/fixture-inner/index.js\nexport const inner = 1;\n");
+    expect(() => renderNotices(host)).toThrow("fixture-inner@3.0.0 (pre-bundled by @hasna/fixture-host 1.0.0)");
+    mkdirSync(join(host, "node_modules", "fixture-inner"));
+    writeFileSync(join(host, "node_modules", "fixture-inner", "package.json"), JSON.stringify({ name: "fixture-inner", version: "3.0.0", license: "MIT" }));
+    writeFileSync(join(host, "node_modules", "fixture-inner", "LICENSE"), "MIT License\n\nCopyright (c) Fixture Inner Authors\n");
+    const text = renderNotices(host) as string;
+    expect(text).toContain("fixture-inner 3.0.0\nLicense: MIT\nPre-bundled by @hasna/fixture-host 1.0.0 in its dist/inner.js.\n\nMIT License\n\nCopyright (c) Fixture Inner Authors\n");
+    expect(text).not.toContain("\n@hasna/fixture-host 1.0.0\nLicense:");
+  } finally { rmSync(host, { recursive: true, force: true }); }
+});

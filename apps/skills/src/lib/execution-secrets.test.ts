@@ -29,9 +29,9 @@ test("with @hasna/secrets absent, the factory refuses terminally and says to ins
 
 let installed = false;
 try { Bun.resolveSync("@hasna/secrets/sdk", import.meta.dir); installed = true; } catch { /* absent: an install without access to it */ }
-test.skipIf(!installed)("the default load finds the installed @hasna/secrets where it is installed", async () => {
-  const factory = await defaultSecretsClientFactory();
-  expect(typeof factory).toBe("function");
+test(installed ? "the default load finds the installed @hasna/secrets" : "without @hasna/secrets the default load refuses terminally", async () => {
+  if (installed) expect(typeof await defaultSecretsClientFactory()).toBe("function");
+  else await expect(defaultSecretsClientFactory()).rejects.toMatchObject({ code: "LOCAL_SECRET_UNAVAILABLE" });
 });
 
 test("no bindings resolve to nothing, and an injected client is used as given", async () => {

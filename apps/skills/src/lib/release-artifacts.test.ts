@@ -118,8 +118,10 @@ releaseArtifactTest("two clean builds produce byte-identical npm packs and an is
     run([process.execPath, "--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts", `--config=${bunfig}`], producer, env);
     expect(sha256(join(producer, "bun.lock"))).toBe(lockHash);
     // The registry refuses the optional, private @hasna/secrets anonymously
-    // (SH-00058), and the build inlines its client. Place the exact locked
-    // tarball the CI install step fetched, checked against bun.lock.
+    // (SH-00058). The build keeps it external, but the producer's dependency
+    // check needs each locked package's manifest, and the bundle-content check
+    // reads its export names. Place the exact locked tarball the CI install step
+    // fetched, checked against bun.lock.
     const { privatePackageOverrides } = await import(join(packageRoot, "scripts/private-package-overrides.ts"));
     const { integrityOf, lockedTarball, PRIVATE_PACKAGES } = await import(join(packageRoot, "scripts/fetch-locked-private.mjs"));
     const privateTarballs = privatePackageOverrides() as Record<string, string>;
