@@ -118,7 +118,12 @@ function configuredRoots(home: string, explicitHome: boolean): string[] {
         || !executable && (binding.builtinNames?.length || binding.agent === "gemini" && binding.sources.some(source => basename(source.path) === "package.json"))) {
         throw new Error("Native discovery runtime target is unresolved or changed");
       }
-      roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: binding.agent, canonical: physicalPath, retained: binding, executable, narrowed }));
+      // Gemini and Cursor: the policy's recorded bridge command and profile
+      // identify the hook entries hook install wrote, which add no opaque hook.
+      const managedCommand = current.commands?.[agent], managedProfile = current.profiles?.[agent];
+      const managedHook = (binding.agent === "gemini" || binding.agent === "cursor") && typeof managedCommand === "string" && typeof managedProfile === "string"
+        ? { command: managedCommand, profile: managedProfile } : undefined;
+      roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: binding.agent, canonical: physicalPath, retained: binding, executable, narrowed, ...(managedHook ? { managedHook } : {}) }));
     }
   };
   if (homePolicy) admitPolicy(homePolicy.value, homeData);

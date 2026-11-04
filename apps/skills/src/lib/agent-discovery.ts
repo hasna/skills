@@ -5,7 +5,7 @@ import { lstatSync, opendirSync, readFileSync, readdirSync, realpathSync } from 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
-import type { IntegrationAgent } from "./agent-adapters.js";
+import { renderAgentHookCommand, type IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory, type DiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 import { pluginExecutableDigest } from "./plugin-projection-store.js";
@@ -1016,7 +1016,7 @@ export function resolveAgentDiscovery(options: DiscoveryOptions): AgentDiscovery
  * while current supported controls are re-derived even when old settings or
  * directory witnesses are stale. Non-enumerable executable inputs still need
  * their existing review. No witness, policy or enrollment is written. */
-export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): readonly string[] {
+export function resolveAgentDiscoveryExclusionRoots(options: Omit<DiscoveryOptions, "reviewed" | "retainedReview"> & { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string; managedHook?: ManagedBridgeHook }): readonly string[] {
   if (options.nativeHome !== undefined && (!["claude", "codex"].includes(options.agent) || !isAbsolute(options.nativeHome))) throw new Error("Unsupported native discovery exclusion home");
   const current = resolveDiscovery(options, options);
   const roots = [...new Set([...(options.retained?.roots ?? []), ...current.roots])];
@@ -1057,6 +1057,42 @@ export function nativeDiscoveryAliasTargets(roots: readonly string[], home: stri
     } finally { directory.closeSync(); }
   }
   return [...targets];
+}
+
+/** The Skills bridge command and selection profile the policy records for an
+ * agent (`bridge.commands` and `bridge.profiles`), from which hook install
+ * renders its managed hook commands. */
+export interface ManagedBridgeHook { command: string; profile: string }
+/** Whether `hooks` hold only the managed Skills bridge entries hook install
+ * writes (agent-integration configureHooks), each with exactly the command
+ * renderAgentHookCommand produces for its event from an absolute recorded
+ * command:
+ *   - Gemini: one entry per event (BeforeAgent, SessionStart, BeforeTool) with
+ *     one command handler, timeout 15000, and matcher `activate_skill` only on
+ *     BeforeTool;
+ *   - Cursor: one `{ command, timeout: 15 }` entry per event
+ *     (beforeSubmitPrompt, sessionStart). */
+function hooksAreManagedBridge(agent: "gemini" | "cursor", hooks: unknown, managed: ManagedBridgeHook): boolean {
+  const table = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === "object" && !Array.isArray(value));
+  const exactKeys = (value: Record<string, any>, keys: string[]): boolean => Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+  if (!table(hooks) || typeof managed.command !== "string" || !isAbsolute(managed.command)) return false;
+  const events = agent === "gemini" ? ["BeforeAgent", "SessionStart", "BeforeTool"] : ["beforeSubmitPrompt", "sessionStart"];
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!events.includes(event) || !Array.isArray(entries) || entries.length !== 1) return false;
+    let expected: string;
+    try { expected = renderAgentHookCommand(managed.command, agent, managed.profile, event); } catch { return false; }
+    const entry = entries[0];
+    if (!table(entry)) return false;
+    if (agent === "cursor") {
+      if (!exactKeys(entry, ["command", "timeout"]) || entry.timeout !== 15 || entry.command !== expected) return false;
+      continue;
+    }
+    if (!exactKeys(entry, event === "BeforeTool" ? ["hooks", "matcher"] : ["hooks"]) || event === "BeforeTool" && entry.matcher !== "activate_skill"
+      || !Array.isArray(entry.hooks) || entry.hooks.length !== 1) return false;
+    const hook = entry.hooks[0];
+    if (!table(hook) || !exactKeys(hook, ["command", "timeout", "type"]) || hook.type !== "command" || hook.timeout !== 15000 || hook.command !== expected) return false;
+  }
+  return true;
 }
 
 const CODEX_MARKETPLACE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -1122,7 +1158,7 @@ function codexPluginHookHandlers(value: unknown): { commands: number; servers: S
   return result;
 }
 
-function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
+function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string; managedHook?: ManagedBridgeHook }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
   const budget = discoveryByteBudget();
@@ -1194,13 +1230,19 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const fieldKey = (key: string): string => /^[A-Za-z_$][A-Za-z0-9_$.-]{0,22}$/.test(key)
       && !/(?:sk|rk|pk)_(?:live|test)_|whsec_/i.test(key) ? JSON.stringify(key) : "[withheld field key]";
     const unsupportedFields = (names: readonly string[], label: string): never => unresolved(`unknown discovery controls have no root-exclusion adapter for ${label}${names.slice(0, 8).map(fieldKey).join(", ")}${names.length > 8 ? ", additional keys withheld" : ""} in ${quotedPath(canonical(configPath))}`);
-    const adapted = agent === "codex" ? codexRootFreeControls(config) : [];
+    // An empty OpenCode `instructions` list loads no instruction file.
+    const adapted = agent === "codex" ? codexRootFreeControls(config)
+      : agent === "opencode" && Array.isArray(config.instructions) && config.instructions.length === 0 ? ["instructions"] : [];
     const unsupportedControls = controls.filter(key => !supported[agent].includes(key) && !adapted.includes(key));
     if (unsupportedControls.length) unsupportedFields(unsupportedControls, "");
     // A command can register roots dynamically. An existing exact or narrowed
     // settings review is required for that non-enumerable input only.
     if (config.hooks !== undefined && !object(config.hooks)) unresolved("hooks must be an object");
-    const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0;
+    // Gemini settings or Cursor hooks whose entries are exactly the Skills
+    // bridge entries `skills hook install` writes from the policy's recorded
+    // command and profile hold no opaque hook; anything else stays opaque.
+    const managedBridgeOnly = (agent === "gemini" || agent === "cursor") && exclusion.managedHook !== undefined && hooksAreManagedBridge(agent, config.hooks, exclusion.managedHook);
+    const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0 && !managedBridgeOnly;
     let hasPluginConfigs = false, hasFunctionHookEnvironment = false;
     const verifyCurrentOpaqueSettings = (label: string): void => {
       const retained = exclusion.retained;
