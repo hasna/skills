@@ -991,7 +991,7 @@ for (const additionVersion of [0, 1, 2]) for (const format of ["json", "human"] 
   }
   // Build in an owned child: repeated in-process Bun builds share resolver
   // state with unrelated suite fixtures that create/remove temporary packages.
-  const bundle = join(f.home, "current-cli.js"), builder = Bun.spawn([process.execPath, "build", join(import.meta.dir, "../cli/index.tsx"), "--target", "bun", "--outfile", bundle], { env: { HOME: f.home, PATH: process.env.PATH! }, stdout: "pipe", stderr: "pipe" });
+  const bundle = join(f.home, "current-cli.js"), builder = Bun.spawn([process.execPath, "build", join(import.meta.dir, "../cli/index.tsx"), "--target", "bun", "--external", "@hasna/secrets", "--outfile", bundle], { env: { HOME: f.home, PATH: process.env.PATH! }, stdout: "pipe", stderr: "pipe" });
   const [, buildError, buildStatus] = await Promise.all([new Response(builder.stdout).text(), new Response(builder.stderr).text(), builder.exited]);
   expect(buildStatus).toBe(0); expect(buildError).toBe("");
   const current = currentRecoveryPackage(f, readFileSync(bundle, "utf8")), proof = current.releaseProof;

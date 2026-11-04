@@ -2,8 +2,12 @@ name: Skills packed consumer gate
 
 # Packed-archive consumer acceptance for @hasna/skills that installs and runs
 # floating third-party packages (the MCP SDK, zod releases, npm layouts). It is
-# deliberately separate from release-skills.yml: no environment, no secrets, no
-# id-token, read-only contents. The publish job never runs these layouts.
+# deliberately separate from release-skills.yml: no publishing environment, no
+# id-token, read-only contents. Its one secret, the full-access npm token the private
+# @hasna/secrets needs, reaches only the locked dependency install step, which
+# runs before any test or third-party code. The consumer fixtures install
+# @hasna/secrets from the tarball that step fetched, without the token
+# (scripts/private-package-overrides.ts). The publish job never runs these layouts.
 on:
   pull_request:
     paths:
@@ -21,6 +25,10 @@ permissions:
 jobs:
   consumer-gate:
     if: github.repository == 'hasna/skills'
+    # Holds no deployment and no id-token. The environment exists so the npm token
+    # can be an environment secret that only jobs naming it can read, never a run
+    # of an older head that predates it.
+    environment: skills-consumer-gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -44,6 +52,28 @@ jobs:
           # ~/.bun/bin/bun untouched.
           no-cache: true
 
+      # The only step that holds NPM_READ_TOKEN, Andrei's full-access npm token,
+      # which the private @hasna/secrets needs. It runs before any test, build or
+      # third-party package code in this job: a locked install with no lifecycle
+      # scripts, then a builtins-only Node script that fetches the locked private
+      # tarballs, checked against bun.lock, so later consumer fixtures install them
+      # from a file without the token. bun reads this folder's .npmrc, which holds
+      # only the literal ${NPM_READ_TOKEN} reference; the value is never written,
+      # and the file goes when the step ends.
+      - name: Install locked standalone Skills dependencies
+        working-directory: apps/skills
+        env:
+          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NPM_READ_TOKEN" || { echo "::error::NPM_READ_TOKEN is not available to this run"; exit 1; }
+          trap 'rm -f .npmrc' EXIT
+          umask 077
+          printf '%s\n' '//registry.npmjs.org/:_authToken=${NPM_READ_TOKEN}' > .npmrc
+          bun install --frozen-lockfile --ignore-scripts --backend copyfile
+          node scripts/fetch-locked-private.mjs --out "$RUNNER_TEMP/skills-private-tarballs"
+          echo "SKILLS_PRIVATE_TARBALLS=$RUNNER_TEMP/skills-private-tarballs/private-tarballs.json" >> "$GITHUB_ENV"
+
       - name: Install and verify the CI npm toolchain
         run: |
           set -euo pipefail
@@ -51,10 +81,6 @@ jobs:
           npm install --global --prefix "$npm_prefix" npm@11.19.0
           test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
           echo "$npm_prefix/bin" >> "$GITHUB_PATH"
-
-      - name: Install locked standalone Skills dependencies
-        working-directory: apps/skills
-        run: bun install --frozen-lockfile --ignore-scripts --backend copyfile
 
       - name: Typecheck
         working-directory: apps/skills

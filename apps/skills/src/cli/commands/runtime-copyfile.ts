@@ -16,6 +16,12 @@ import {
 } from "./runtime-launcher.js";
 
 const PACKAGE_NAME = "@hasna/skills";
+/**
+ * SH-00058. The one optional dependency this credential-free installer may find
+ * refused by the registry: the private @hasna/secrets, which only an install
+ * with access to it receives. Any other refused package still fails an update.
+ */
+const PRIVATE_OPTIONAL_PACKAGE = "@hasna/secrets";
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
 const STABLE_SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
 const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
@@ -148,6 +154,10 @@ interface CopyfileReceipt {
   launchers: RuntimeLayout["launchers"];
   dependencyPolicy?: NpmReleaseAgePolicy & { npmVersion: string };
   reviewedLockSha256?: string;
+  /** The active runtime's @hasna/secrets, packed and carried into this runtime without the registry. */
+  carriedSecrets?: CarriedSecrets["record"];
+  /** Optional packages the registry refused and this runtime does not have (only @hasna/secrets). */
+  refusedOptionalPackages?: string[];
   prerequisites?: JsonObject;
   switchedLaunchers: string[];
   rollbackCompletedLaunchers: string[];
@@ -692,6 +702,69 @@ async function runNpm(args: string[], cwd: string, home: string, staging: string
   return npmVersion;
 }
 
+interface CarriedSecrets {
+  /** The tarball's path relative to the staged install package, as its file: override names it. */
+  spec: string;
+  source: string;
+  record: { version: string; tarballSha256: string; packageTreeSha256: string; verification: "runtime-receipt" | "unrecorded" };
+}
+
+/**
+ * The @hasna/secrets the active runtime's Skills package resolves, packed into
+ * the staged install (SH-00058). The registry refuses it to this credential-free
+ * installer, so an existing vault user's copy is carried forward at exactly its
+ * installed version instead. Where the active runtime recorded a receipt and an
+ * install lock, its tree must still match the receipt and the lock must name
+ * the same version.
+ */
+async function carryInstalledSecrets(layout: RuntimeLayout, stagePackage: string, home: string, stagePath: string, policy?: NpmReleaseAgePolicy): Promise<CarriedSecrets | null> {
+  const runtimePath = dirname(dirname(dirname(layout.currentPackageRoot)));
+  const source = [join(layout.currentPackageRoot, "node_modules", PRIVATE_OPTIONAL_PACKAGE), join(runtimePath, "node_modules", PRIVATE_OPTIONAL_PACKAGE)]
+    .find(path => entryExists(join(path, "package.json")));
+  if (!source) return null;
+  assertNoSymlinkAncestors(source);
+  const manifest = object(JSON.parse(readFileSync(join(source, "package.json"), "utf8")), "CARRIED_SECRETS_MANIFEST_INVALID");
+  if (manifest.name !== PRIVATE_OPTIONAL_PACKAGE || typeof manifest.version !== "string" || !STABLE_SEMVER_PATTERN.test(manifest.version)) throw new Error("CARRIED_SECRETS_MANIFEST_INVALID");
+  let verification: CarriedSecrets["record"]["verification"] = "unrecorded";
+  if (entryExists(join(runtimePath, "rollout-receipt.json"))) {
+    const prior = object(JSON.parse(readFileSync(join(runtimePath, "rollout-receipt.json"), "utf8")), "CARRIED_SECRETS_RUNTIME_DRIFT");
+    if (readTree(join(runtimePath, "node_modules"), true).digest !== prior.runtimeTreeSha256) throw new Error("CARRIED_SECRETS_RUNTIME_DRIFT");
+    verification = "runtime-receipt";
+  }
+  if (entryExists(join(runtimePath, "install-lock.json"))) {
+    const lock = object(JSON.parse(readFileSync(join(runtimePath, "install-lock.json"), "utf8")), "CARRIED_SECRETS_LOCK_MISMATCH");
+    const locked = (lock.packages as Record<string, { version?: unknown }> | undefined)?.[relative(runtimePath, source).split(sep).join("/")];
+    if (locked?.version !== manifest.version) throw new Error("CARRIED_SECRETS_LOCK_MISMATCH");
+  }
+  const carried = join(stagePackage, "carried");
+  mkdirSync(carried, { mode: 0o700 });
+  await runNpm(["pack", source, "--pack-destination", carried], stagePackage, home, stagePath, policy);
+  const file = `hasna-secrets-${manifest.version}.tgz`;
+  if (JSON.stringify(readdirSync(carried)) !== JSON.stringify([file])) throw new Error("CARRIED_SECRETS_PACK_FAILED");
+  return { spec: `file:./carried/${file}`, source, record: { version: manifest.version, tarballSha256: hash(readFileSync(join(carried, file))),
+    packageTreeSha256: readTree(source, false, true).digest, verification } };
+}
+
+/**
+ * Optional dependencies a lock leaves unresolved, as "<lock path> <name>". npm
+ * omits an optional package the registry refuses from the lock it writes, and
+ * `npm ci` then refuses that lock as out of sync.
+ */
+function unresolvedOptionalDependencies(lockBytes: Uint8Array): string[] {
+  const lock = object(JSON.parse(new TextDecoder().decode(lockBytes)), "INSTALL_LOCK_INVALID");
+  const packages = object(lock.packages, "INSTALL_LOCK_INVALID") as Record<string, { optionalDependencies?: Record<string, string>; link?: boolean }>;
+  const resolves = (from: string, name: string) => {
+    for (let base = from; ; ) {
+      if (packages[base ? `${base}/node_modules/${name}` : `node_modules/${name}`]) return true;
+      if (!base) return false;
+      const at = base.lastIndexOf("node_modules/");
+      base = at > 0 ? base.slice(0, at - 1) : "";
+    }
+  };
+  return Object.entries(packages).filter(([, entry]) => !entry.link)
+    .flatMap(([from, entry]) => Object.keys(entry.optionalDependencies ?? {}).filter(name => !resolves(from, name)).map(name => `${from} ${name}`)).sort();
+}
+
 function comparePackageTrees(expectedRoot: string, installedRoot: string): string {
   if (entryExists(join(expectedRoot, "node_modules"))) throw new Error("TARBALL_BUNDLED_DEPENDENCIES_UNSUPPORTED");
   const expected = readTree(expectedRoot, false);
@@ -1101,7 +1174,11 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     const stagePackage = join(stagePath, "install");
     mkdirSync(stagePackage, { mode: 0o700 });
     copyFileSync(artifact.tarballPath, join(stagePackage, "verified.tgz"));
-    writeFileSync(join(stagePackage, "package.json"), JSON.stringify({ name: "skills-runtime-install", version: "0.0.0", private: true, dependencies: { [PACKAGE_NAME]: "file:./verified.tgz" } }, null, 2), { mode: 0o600, flag: "wx" });
+    const carriedSecrets = await carryInstalledSecrets(layout, stagePackage, home, stagePath, policy);
+    // A reviewed lock names registry tarballs only, so it cannot carry a local copy.
+    if (carriedSecrets && reviewedLockBytes) throw new Error("REVIEWED_LOCK_CANNOT_CARRY_SECRETS");
+    writeFileSync(join(stagePackage, "package.json"), JSON.stringify({ name: "skills-runtime-install", version: "0.0.0", private: true, dependencies: { [PACKAGE_NAME]: "file:./verified.tgz" },
+      ...(carriedSecrets ? { overrides: { [PRIVATE_OPTIONAL_PACKAGE]: carriedSecrets.spec } } : {}) }, null, 2), { mode: 0o600, flag: "wx" });
     let npmVersion: string | undefined;
     if (reviewedLockBytes) {
       await validateReviewedRuntimeLock(reviewedLockBytes, options.reviewedLockSha256!, {
@@ -1114,8 +1191,15 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
     } else {
       npmVersion = await runNpm(["install", "--package-lock-only", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
     }
-    const ciNpmVersion = await runNpm(["ci", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
+    // Only @hasna/secrets, as an optional dependency of Skills itself, may be
+    // missing from the lock. npm ci refuses such a lock as out of sync, so it is
+    // installed exactly as locked with npm install, and the lock must not change.
+    const plannedLock = readFileSync(join(stagePackage, "package-lock.json"));
+    const refusedOptional = unresolvedOptionalDependencies(plannedLock);
+    if (refusedOptional.some(item => item !== `node_modules/${PACKAGE_NAME} ${PRIVATE_OPTIONAL_PACKAGE}`)) throw new Error("DEPENDENCY_GRAPH_OPTIONAL_REFUSED");
+    const ciNpmVersion = await runNpm([refusedOptional.length ? "install" : "ci", "--prefix", stagePackage], stagePackage, home, stagePath, policy);
     if (!reviewedLockBytes && npmVersion !== ciNpmVersion) throw new Error("NPM_VERSION_DRIFT_DURING_UPDATE");
+    if (!readFileSync(join(stagePackage, "package-lock.json")).equals(plannedLock)) throw new Error(reviewedLockBytes ? "REVIEWED_LOCK_DRIFT_DURING_INSTALL" : "INSTALL_LOCK_DRIFT_DURING_INSTALL");
     npmVersion = ciNpmVersion;
     const lockBytes = readFileSync(join(stagePackage, "package-lock.json"));
     if (reviewedLockBytes) {
@@ -1128,6 +1212,13 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
       if (!readFileSync(join(stagePackage, "package-lock.json")).equals(reviewedLockBytes)) throw new Error("REVIEWED_LOCK_DRIFT_DURING_INSTALL");
     }
     const installedPackage = join(stagePackage, "node_modules", "@hasna", "skills");
+    const installedSecrets = [join(installedPackage, "node_modules", PRIVATE_OPTIONAL_PACKAGE), join(stagePackage, "node_modules", PRIVATE_OPTIONAL_PACKAGE)]
+      .find(path => entryExists(join(path, "package.json")));
+    if (carriedSecrets) {
+      // The copy Skills resolves is exactly the carried one, payload for payload.
+      if (!installedSecrets || object(JSON.parse(readFileSync(join(installedSecrets, "package.json"), "utf8")), "CARRIED_SECRETS_INSTALL_MISMATCH").version !== carriedSecrets.record.version
+          || readTree(installedSecrets, false, true).digest !== carriedSecrets.record.packageTreeSha256) throw new Error("CARRIED_SECRETS_INSTALL_MISMATCH");
+    } else if (installedSecrets && refusedOptional.length) throw new Error("PRIVATE_OPTIONAL_PACKAGE_UNEXPECTED");
     const installed = readPackage(join(installedPackage, "package.json"));
     if (installed.version !== version || JSON.stringify(Object.entries(installed.bins).sort()) !== JSON.stringify(Object.entries(layout.bin).sort())) {
       throw new Error("INSTALLED_PACKAGE_IDENTITY_MISMATCH");
@@ -1154,6 +1245,8 @@ export async function updateCopyfileRuntime(version: string, options: { homeDir?
       currentPackageRoot: layout.currentPackageRoot, targetPackageRoot, configs: configPreimages, preimageSha256,
       ...(policy ? { dependencyPolicy: { ...policy, npmVersion: npmVersion! } } : {}),
       ...(reviewedLockBytes ? { reviewedLockSha256: options.reviewedLockSha256 } : {}),
+      ...(carriedSecrets ? { carriedSecrets: carriedSecrets.record } : {}),
+      ...(refusedOptional.length ? { refusedOptionalPackages: [PRIVATE_OPTIONAL_PACKAGE] } : {}),
       launchers, switchedLaunchers: [], rollbackCompletedLaunchers: [],
     };
     writeJsonPrivate(join(stagePath, "rollout-receipt.json"), receipt);

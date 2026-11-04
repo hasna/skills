@@ -12,7 +12,7 @@ import { exactProfileSelection, readSelectedEntries, resolveSelectionContext, ty
 import { readCachedSelection, selectionCacheRoot, SkillSelectionError } from "./selection-cache.js";
 import { describeEntries } from "./selected-manifest.js";
 import { SkillEntryPaths } from "./skill-entry-path.js";
-import { declaredSecretNames, validateSelectedSecretBindings, resolveSelectedSecrets, redactExecutionSecrets, selectedSecretBindingsTemplate, type SelectedSecretBindings, type SelectedSecretsClient } from "./execution-secrets.js";
+import { declaredSecretNames, defaultSecretsClientFactory, validateSelectedSecretBindings, resolveSelectedSecrets, redactExecutionSecrets, selectedSecretBindingsTemplate, type SelectedSecretBindings, type SelectedSecretsClient } from "./execution-secrets.js";
 
 export interface ResolvedSelectedRun {
   selection: ResolvedSkillSelection;
@@ -117,7 +117,7 @@ export async function prepareSelectedSecretBindings(selected: ResolvedSelectedRu
   if (kind !== "executable" && !declaredOperation(manifest)) throw new SkillSelectionError("INSTRUCTION_SKILL", "Instruction skills do not accept execution secret bindings.");
   const names = declaredSecretNames(manifest.runtime?.env);
   if (!names.length) throw new SkillSelectionError("NO_DECLARED_SECRETS", "This selected executable does not declare any environment references.");
-  return selectedSecretBindingsTemplate({ selection: selected.selection, profileId: selected.profileId, cwd }, names);
+  return selectedSecretBindingsTemplate({ selection: selected.selection, profileId: selected.profileId, cwd }, names, await defaultSecretsClientFactory());
 }
 export async function executeSelectedLocal(selected: ResolvedSelectedRun, options: SelectedLocalRunOptions = {}) {
   const selection = structuredClone(selected.selection), profileId = selected.profileId;

@@ -694,6 +694,11 @@ export async function resolveSkillsConnection(
     completed = await completePointerCredential(SKILLS_APP, pointer, explicitVault ? snapshotEnv : env);
   } catch (error) {
     const translated = asSkillsFleetCredentialError(error, pointer.pointerVaultKey);
+    // @hasna/secrets is an optional dependency that only an install with access
+    // to it receives (SH-00058); say so where its absence stops a vault pointer.
+    if (translated?.message.includes("(@hasna/secrets) is not installed")) {
+      throw new SkillsFleetCredentialError(`${translated.message} @hasna/secrets is optional and private: install it with access to it.`, "MISSING_API_CREDENTIAL");
+    }
     if (translated) throw translated;
     throw error;
   }
