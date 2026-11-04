@@ -34,6 +34,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { assertMcpBinarySurface, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { npmLockInstallCommand, REFUSED_OPTIONAL_PACKAGE } from "./npm-lock-install.js";
+import { privatePackageOverrides } from "./private-package-overrides.js";
 
 export type McpZodCase = { label: string; installer: "bun" | "npm"; zodSpec: string };
 export type McpZodResult = {
@@ -199,7 +201,11 @@ async function installWithBun(consumer: string, root: string, home: string): Pro
   assert.equal(sha256(readFileSync(join(consumer, "bun.lock"))), lock, "The frozen MCP consumer lock changed");
 }
 
-/** Resolve a lock with npm (seven-day window, Hasna exempt), then install exactly that lock with `npm ci`. */
+/**
+ * Resolve a lock with npm (seven-day window, Hasna exempt), then install exactly
+ * that lock: with `npm ci`, or with `npm install` where the lock leaves only the
+ * refused optional @hasna/secrets out (scripts/npm-lock-install.ts).
+ */
 async function installWithNpm(consumer: string, root: string, home: string): Promise<void> {
   const npm = Bun.which("npm");
   assert(npm, "The npm split-layout case needs npm on PATH");
@@ -212,9 +218,10 @@ async function installWithNpm(consumer: string, root: string, home: string): Pro
   await writeFile(env.NPM_CONFIG_GLOBALCONFIG, "", { mode: 0o600 });
   const age = ["--min-release-age=7", ...PUBLISHER_EXEMPT.map(name => `--min-release-age-exclude=${name}`)];
   await run([npm, "install", "--package-lock-only", "--ignore-scripts", ...age], consumer, env);
-  const lock = sha256(readFileSync(join(consumer, "package-lock.json")));
-  await run([npm, "ci", "--ignore-scripts", ...age], consumer, env);
-  assert.equal(sha256(readFileSync(join(consumer, "package-lock.json"))), lock, "npm ci changed the MCP consumer lock");
+  const lockText = readFileSync(join(consumer, "package-lock.json"), "utf8");
+  const command = npmLockInstallCommand(lockText);
+  await run([npm, command, "--ignore-scripts", ...age], consumer, env);
+  assert.equal(sha256(readFileSync(join(consumer, "package-lock.json"))), sha256(lockText), `npm ${command} changed the MCP consumer lock`);
 }
 
 /**
@@ -229,15 +236,19 @@ export async function verifyInstalledMcpZod(options: {
   const consumer = join(options.root, `mcp-zod-${testCase.label}`);
   const home = join(consumer, "home");
   await mkdir(home, { recursive: true, mode: 0o700 });
-  // The root owns zod, as an application with its own frozen lock does.
+  // The root owns zod, as an application with its own frozen lock does. Private
+  // packages come from the locked tarballs the CI install step fetched, never with a token.
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module",
-    dependencies: { "@hasna/skills": `file:${options.archive}`, zod: testCase.zodSpec } }));
+    dependencies: { "@hasna/skills": `file:${options.archive}`, zod: testCase.zodSpec }, overrides: privatePackageOverrides() }));
   if (testCase.installer === "bun") await installWithBun(consumer, options.root, home);
   else await installWithNpm(consumer, options.root, home);
 
   const installed = realpathSync(join(consumer, "node_modules/@hasna/skills"));
   const pkg = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   assert.equal(pkg.name, "@hasna/skills"); assert.equal(pkg.version, options.version);
+  // With the locked tarball supplied the layout has @hasna/secrets; without it, none.
+  const secrets = [join(installed, "node_modules", REFUSED_OPTIONAL_PACKAGE), join(consumer, "node_modules", REFUSED_OPTIONAL_PACKAGE)].some(path => existsSync(join(path, "package.json")));
+  assert.equal(secrets, Boolean(privatePackageOverrides()[REFUSED_OPTIONAL_PACKAGE]), `${testCase.label}: @hasna/secrets is ${secrets ? "installed without" : "missing with"} the locked tarball`);
   const mcp = realpathSync(join(installed, pkg.bin["skills-mcp"]));
   assert(mcp.startsWith(installed + sep), "The MCP binary must resolve inside the installed package");
   assertMcpBinarySurface(readFileSync(mcp, "utf8"));

@@ -13,7 +13,7 @@ export async function buildCliFixture(entrypoint: string, outfile: string): Prom
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST" || realpathSync(installed) !== realpathSync(dependency)) throw error;
   }
-  const child = Bun.spawn([process.execPath, "--no-env-file", "build", entrypoint, "--outfile", outfile, "--target", "bun", "--external", "@hasna/contracts/kernel-lock"], {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "build", entrypoint, "--outfile", outfile, "--target", "bun", "--external", "@hasna/contracts/kernel-lock", "--external", "@hasna/secrets"], {
     env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, NO_COLOR: "1" },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });

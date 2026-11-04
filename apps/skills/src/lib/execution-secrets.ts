@@ -1,7 +1,6 @@
 /** Explicit, value-free grants for a selected local execution. Never read bindings from a skill bundle. */
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { hostname as stationHostname } from "node:os";
-import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { SkillSelectionError } from "./selection-cache.js";
 
@@ -23,7 +22,28 @@ export interface SelectedSecretScope {
   profileId: string;
   cwd: string;
 }
-export function selectedSecretBindingsTemplate(scope: SelectedSecretScope, names: string[], createClient: () => SelectedSecretsClient = createSecretsClientFromEnv): SelectedSecretBindings {
+/**
+ * The part of the @hasna/secrets SDK entry Skills uses. Skills typechecks and
+ * builds without the optional package: src/types/hasna-secrets-sdk.d.ts declares
+ * this much of the module, and src/lib/secrets-sdk-types.test.ts checks both
+ * against the real package wherever that is installed.
+ */
+export interface SecretsSdk {
+  createSecretsClientFromEnv(env?: Record<string, string | undefined>): SelectedSecretsClient;
+}
+/**
+ * The independently configured Secrets SDK. @hasna/secrets is an optional
+ * dependency that only an install with access to it receives (SH-00058), and
+ * the build keeps it external, so it is loaded here, when a vault grant needs
+ * it, and nowhere else.
+ */
+export async function defaultSecretsClientFactory(load: () => Promise<SecretsSdk> = () => import("@hasna/secrets/sdk")): Promise<() => SelectedSecretsClient> {
+  let sdk: SecretsSdk;
+  try { sdk = await load(); }
+  catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "Vault secret bindings need the optional @hasna/secrets package, which this install could not load. Install @hasna/secrets with access to it, then run again."); }
+  return () => sdk.createSecretsClientFromEnv();
+}
+export function selectedSecretBindingsTemplate(scope: SelectedSecretScope, names: string[], createClient: () => SelectedSecretsClient): SelectedSecretBindings {
   let secretsAuthority: string;
   try { secretsAuthority = createClient().baseUrl; }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "Configure the Secrets CLI authority and authentication before preparing execution bindings."); }
@@ -97,10 +117,11 @@ export function validateSelectedSecretBindings(value: unknown, scope: SelectedSe
   return structuredClone(value) as unknown as SelectedSecretBindings;
 }
 
-export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, createClient: () => SelectedSecretsClient = createSecretsClientFromEnv): Promise<Record<string, string>> {
+export async function resolveSelectedSecrets(bindings: SelectedSecretBindings, createClient?: () => SelectedSecretsClient): Promise<Record<string, string>> {
   if (!Object.keys(bindings.bindings).length) return {};
+  const factory = createClient ?? await defaultSecretsClientFactory();
   let client: SelectedSecretsClient;
-  try { client = createClient(); }
+  try { client = factory(); }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "The configured Secrets client could not authenticate. No ambient credential fallback was attempted."); }
   if (client.baseUrl !== bindings.secretsAuthority) return refuse("SECRET_BINDING_AUTHORITY_MISMATCH", "The configured Secrets authority differs from the reviewed binding. No secret was requested.");
   const env: Record<string, string> = {};

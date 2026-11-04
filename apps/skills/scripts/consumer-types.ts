@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { assertInstalledBinaries, assertInstalledIdentity, assertMcpBinarySurface, completeConsumerArchive, parseConsumerArguments, stageConsumerArchive } from "./consumer-archive.js";
+import { privatePackageOverrides } from "./private-package-overrides.js";
 
 // Check the public distribution against its declared dependencies, independently
 // of workspace overrides and skipLibCheck. npm's lifecycle is disabled in the
@@ -70,7 +71,8 @@ try {
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
     dependencies: { "@hasna/skills": `file:${archive.installedFrom}` },
     devDependencies: { typescript: "5.9.3", ...typePins },
-    overrides: typePins,
+    // Private packages come from the locked tarballs the CI install step fetched, never with a token.
+    overrides: { ...typePins, ...privatePackageOverrides() },
   }));
   await writeFile(join(workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: {
     target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true,
