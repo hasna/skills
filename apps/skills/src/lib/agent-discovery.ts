@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
+import { parseHermesConfig, assertHermesEnvironment, hermesHookDefinitions } from "./agent-hermes.js";
 import { renderAgentHookCommand, type IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, captureDiscoveryDirectoryProjection, verifyDiscoveryDirectoryProjection, verifyDiscoveryDirectories, type DiscoveryDirectory, type DiscoveryDirectoryProjection } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
@@ -1062,7 +1062,7 @@ export function nativeDiscoveryAliasTargets(roots: readonly string[], home: stri
 /** The Skills bridge command and selection profile the policy records for an
  * agent (`bridge.commands` and `bridge.profiles`), from which hook install
  * renders its managed hook commands. */
-export interface ManagedBridgeHook { command: string; profile: string }
+export interface ManagedBridgeHook { command: string; profile: string; supervisor?: { path: string; runtime: string; sha256: string } }
 /** Whether `hooks` hold only the managed Skills bridge entries hook install
  * writes (agent-integration configureHooks), each with exactly the command
  * renderAgentHookCommand produces for its event from an absolute recorded
@@ -1092,6 +1092,20 @@ function hooksAreManagedBridge(agent: "gemini" | "cursor", hooks: unknown, manag
     const hook = entry.hooks[0];
     if (!table(hook) || !exactKeys(hook, ["command", "timeout", "type"]) || hook.type !== "command" || hook.timeout !== 15000 || hook.command !== expected) return false;
   }
+  return true;
+}
+
+/** Whether a single-file Sumi plugin loads nothing but Node builtins: every
+ * static `from`/side-effect import names a `node:` module, and every
+ * `import(`/`require(` call takes a `node:` string literal. Anything it cannot
+ * read this way (a computed specifier, a template literal, a relative file or
+ * a package) counts as loading another file. */
+function sumiPluginLoadsOnlyBuiltins(text: string): boolean {
+  for (const match of text.matchAll(/\b(?:import|require)\s*\(\s*(.?)/g)) {
+    const rest = text.slice(match.index! + match[0].length - match[1]!.length);
+    if (!/^(['"])node:[A-Za-z0-9_/.-]+\1/.test(rest)) return false;
+  }
+  for (const match of text.matchAll(/\b(?:from|import)\s*(['"])([^'"]*)\1/g)) if (!match[2]!.startsWith("node:")) return false;
   return true;
 }
 
@@ -1161,6 +1175,7 @@ function codexPluginHookHandlers(value: unknown): { commands: number; servers: S
 function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string; managedHook?: ManagedBridgeHook }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
+  const sumiLocalPluginTexts = new Map<string, string>();
   const budget = discoveryByteBudget();
   let remainingEntries = AGENT_POLICY_LIMITS.discoveryDirectoryEntries;
   const entries = (path: string): string[] => {
@@ -1241,7 +1256,25 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     // Gemini settings or Cursor hooks whose entries are exactly the Skills
     // bridge entries `skills hook install` writes from the policy's recorded
     // command and profile hold no opaque hook; anything else stays opaque.
-    const managedBridgeOnly = (agent === "gemini" || agent === "cursor") && exclusion.managedHook !== undefined && hooksAreManagedBridge(agent, config.hooks, exclusion.managedHook);
+    // Hermes runs its hooks through the Skills supervisor the policy records
+    // (bridge.supervisors.hermes): the entries must be exactly the ones hook
+    // install writes for it, and the supervisor file must still be the bytes
+    // the policy recorded.
+    const managedSupervisorOnly = (): boolean => {
+      const supervisor = exclusion.managedHook?.supervisor;
+      if (agent !== "hermes" || !supervisor || typeof supervisor.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(supervisor.sha256) || !object(config.hooks)) return false;
+      let expected: ReturnType<typeof hermesHookDefinitions>;
+      try { expected = hermesHookDefinitions(supervisor); } catch { return false; }
+      for (const [event, entries] of Object.entries(config.hooks)) {
+        const want = (expected as Record<string, Record<string, unknown>>)[event];
+        if (!want || !Array.isArray(entries) || entries.length !== 1 || !object(entries[0])) return false;
+        const entry = entries[0] as Record<string, unknown>;
+        if (Object.keys(entry).sort().join("\0") !== Object.keys(want).sort().join("\0") || Object.keys(want).some(key => entry[key] !== want[key])) return false;
+      }
+      try { return hashRawDiscoveryFile(canonical(supervisor.path), budget) === supervisor.sha256; } catch { return false; }
+    };
+    const managedBridgeOnly = (agent === "gemini" || agent === "cursor") && exclusion.managedHook !== undefined && hooksAreManagedBridge(agent, config.hooks, exclusion.managedHook)
+      || managedSupervisorOnly();
     const hasHooks = controls.includes("hooks") && config.hooks !== undefined && Object.keys(config.hooks).length > 0 && !managedBridgeOnly;
     let hasPluginConfigs = false, hasFunctionHookEnvironment = false;
     const verifyCurrentOpaqueSettings = (label: string): void => {
@@ -1318,7 +1351,9 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       for (const key of ["plugin", "plugins"]) if (config[key] !== undefined && (!Array.isArray(config[key]) || config[key].length > 512)) unresolved("malformed Sumi plugins");
     }
     if (agent === "hermes" && config.skills !== undefined) {
-      keys(config.skills, ["external_dirs"], "Hermes skills");
+      // A plain non-negative integer nudge interval names no skill source.
+      keys(config.skills, ["external_dirs", "creation_nudge_interval"], "Hermes skills");
+      if (config.skills.creation_nudge_interval !== undefined && !(Number.isSafeInteger(config.skills.creation_nudge_interval) && config.skills.creation_nudge_interval >= 0)) unresolved("malformed Hermes skills creation_nudge_interval");
       if (config.skills.external_dirs !== undefined) paths(typeof config.skills.external_dirs === "string" ? [config.skills.external_dirs] : config.skills.external_dirs, "Hermes external directories");
     }
     if (agent === "gemini") {
@@ -1386,7 +1421,8 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (name === "skills-cli.js" && path === plugins[1]) continue;
       const target = join(path, name);
       if (!lstatSync(target).isFile()) unresolved("local plugin packages need a dedicated discovery adapter");
-      witness(target);
+      const text = witness(target);
+      if (exclusion && text !== null) sumiLocalPluginTexts.set(canonical(target), text);
     } }
     for (const root of roots) {
       safe(root);
@@ -1684,7 +1720,17 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const localPlugins = join(home, ".config/opencode/plugins"); safe(localPlugins);
     if (lstatSync(localPlugins, { throwIfNoEntry: false }) && entries(localPlugins).some(name => name !== "skills-cli.js")) unresolved("additional local plugin hooks require review");
   } else if (agent === "sumi") {
-    if ((config.plugin?.length ?? 0) > 0 || (config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null)) unresolved("external or foreign local plugins require review");
+    // Authoring exclusion accepts a local plugin file the retained explicit
+    // review pins: the same path with a bytes witness equal to the current
+    // bytes, in a file that loads nothing beyond Node builtins. Configured
+    // plugin entries and any other source still refuse.
+    const pinnedLocalPlugin = (source: DiscoverySource): boolean => {
+      const retained = exclusion?.retained, text = sumiLocalPluginTexts.get(source.path);
+      return retained?.method === "reviewed" && text !== undefined && sumiPluginLoadsOnlyBuiltins(text) && retained.sources.some(saved => saved.path === source.path
+        && saved.sha256 === source.sha256 && saved.sha256 !== null && [undefined, "bytes"].includes(saved.hashMode)
+        && saved.format === undefined && saved.fields === undefined && saved.managedPlugins === undefined && saved.reviewArtifact === undefined);
+    };
+    if ((config.plugin?.length ?? 0) > 0 || (config.plugins?.length ?? 0) > 0 || sources.some(source => source.path !== canonical(configPath) && source.path !== canonical(join(sumiConfigDirectory(home), "sumi.jsonc")) && source.sha256 !== null && !pinnedLocalPlugin(source))) unresolved("external or foreign local plugins require review");
   } else if (agent === "hermes") {
     // Python entry points and bundled plugins may register prompt sections or
     // namespaced skills. Do not import them to guess their effective behavior.

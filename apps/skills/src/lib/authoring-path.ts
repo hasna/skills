@@ -120,9 +120,15 @@ function configuredRoots(home: string, explicitHome: boolean): string[] {
       }
       // Gemini and Cursor: the policy's recorded bridge command and profile
       // identify the hook entries hook install wrote, which add no opaque hook.
+      // Hermes: likewise through its recorded supervisor.
       const managedCommand = current.commands?.[agent], managedProfile = current.profiles?.[agent];
+      const supervisor = current.supervisors?.[agent];
       const managedHook = (binding.agent === "gemini" || binding.agent === "cursor") && typeof managedCommand === "string" && typeof managedProfile === "string"
-        ? { command: managedCommand, profile: managedProfile } : undefined;
+        ? { command: managedCommand, profile: managedProfile }
+        // Hermes: the supervisor the policy records runs the managed hooks.
+        : binding.agent === "hermes" && typeof managedCommand === "string" && typeof managedProfile === "string" && supervisor && typeof supervisor === "object"
+          && typeof supervisor.path === "string" && typeof supervisor.runtime === "string" && typeof supervisor.sha256 === "string"
+          ? { command: managedCommand, profile: managedProfile, supervisor: { path: supervisor.path, runtime: supervisor.runtime, sha256: supervisor.sha256 } } : undefined;
       roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: binding.agent, canonical: physicalPath, retained: binding, executable, narrowed, ...(managedHook ? { managedHook } : {}) }));
     }
   };
