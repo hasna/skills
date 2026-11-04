@@ -1087,6 +1087,41 @@ function codexRootFreeControls(config: Record<string, any>): string[] {
   return adapted;
 }
 
+/** Strict reader for one Codex plugin hook declaration (`hooks/hooks.json`, a
+ * manifest `hooks` target, or an inline manifest `hooks` object): the
+ * `{ description?, hooks: { <event>: [{ matcher?, hooks: [handler] }] } }` layout with the
+ * command and mcp_tool handler fields of the Codex hook contract. Returns null
+ * for anything else, so a caller can fail closed. */
+const CODEX_HOOK_EVENTS: ReadonlySet<string> = new Set(["PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "Interrupt"]);
+function codexPluginHookHandlers(value: unknown): { commands: number; servers: Set<string> } | null {
+  const table = (item: unknown): item is Record<string, any> => Boolean(item && typeof item === "object" && !Array.isArray(item));
+  const identifier = (item: unknown): item is string => typeof item === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(item);
+  const text = (item: unknown): boolean => typeof item === "string" && item.length <= AGENT_POLICY_LIMITS.pathCharacters && !item.includes("\0");
+  if (!table(value) || !Object.keys(value).every(key => key === "hooks" || key === "description") || value.description !== undefined && !text(value.description)
+    || !table(value.hooks) || Object.keys(value.hooks).length > 32) return null;
+  const result = { commands: 0, servers: new Set<string>() };
+  for (const [event, groups] of Object.entries(value.hooks)) {
+    if (!CODEX_HOOK_EVENTS.has(event) || !Array.isArray(groups) || groups.length > 32) return null;
+    for (const group of groups) {
+      if (!table(group) || !Object.keys(group).every(key => key === "hooks" || key === "matcher") || group.matcher !== undefined && !text(group.matcher)
+        || !Array.isArray(group.hooks) || group.hooks.length > 32) return null;
+      for (const handler of group.hooks) {
+        if (!table(handler) || handler.timeout !== undefined && !(Number.isSafeInteger(handler.timeout) && handler.timeout >= 0)
+          || handler.statusMessage !== undefined && !text(handler.statusMessage)) return null;
+        if (handler.type === "command") {
+          if (!text(handler.command) || !handler.command || !Object.keys(handler).every(key => ["type", "command", "commandWindows", "command_windows", "timeout", "async", "statusMessage", "additionalContextLimit"].includes(key))) return null;
+          result.commands++;
+        } else if (handler.type === "mcp_tool") {
+          if (!identifier(handler.server) || !identifier(handler.tool) || handler.input !== undefined && !table(handler.input)
+            || !Object.keys(handler).every(key => ["type", "server", "tool", "input", "timeout", "statusMessage"].includes(key))) return null;
+          result.servers.add(handler.server);
+        } else return null;
+      }
+    }
+  }
+  return result;
+}
+
 function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: AgentDiscoveryBinding; narrowed?: NarrowedWitnessLedger; nativeHome?: string }): AgentDiscoveryBinding {
   const canonical = options.canonical ?? resolve, home = resolve(options.home), agent = options.agent;
   const sources: DiscoverySource[] = [], roots = new Set<string>(), builtinNames: string[] = [];
@@ -1444,7 +1479,79 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       && source.sha256 !== null && source.format === undefined && source.fields === undefined && source.managedPlugins === undefined);
     return saved.length > 0 && saved.every(source => projected(source, undefined, budget) === source.sha256);
   };
-  function plugin(root: string): void {
+  // Codex runs an installed plugin from its cache copy
+  // (<native home>/plugins/cache/<marketplace>/<plugin>/<version>), and an
+  // explicit review usually pins that copy's hook files, while exclusion reads
+  // the marketplace source. A source hook file whose exact bytes equal a
+  // reviewed bytes witness of the same file in an installed copy of the same
+  // plugin identity is that reviewed content.
+  const reviewedInstalledCopy = (root: string, path: string, identity: { marketplace: string; name: string }): boolean => {
+    const retained = exclusion?.retained;
+    if (agent !== "codex" || retained?.method !== "reviewed") return false;
+    const inside = relative(root, canonical(path));
+    if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return false;
+    const parent = canonical(join(nativeHome, "plugins/cache", identity.marketplace, identity.name));
+    const current = hashRawDiscoveryFile(canonical(path), budget);
+    if (current === null) return false;
+    return retained.sources.some(source => {
+      if (source.sha256 !== current || source.format !== undefined || source.fields !== undefined || ![undefined, "bytes"].includes(source.hashMode)
+        || source.managedPlugins !== undefined || source.reviewArtifact !== undefined || !source.path.startsWith(parent + sep)) return false;
+      const [version, ...rest] = source.path.slice(parent.length + 1).split(sep);
+      return Boolean(version) && version !== "." && version !== ".." && rest.join(sep) === inside;
+    });
+  };
+  // The retained review's evidence for one Codex plugin whose hooks only call
+  // local stdio MCP tools: every reviewed source and directory except the
+  // configuration (checked by its own settings rules) and the files of other
+  // plugins (other installed copies under plugins/cache and other paths below
+  // a configured marketplace source). The plugin's own files, its catalog, the
+  // files its hook servers run and every source outside plugin trees (user
+  // hooks, runtimes) must still verify. A stale witness of an unrelated plugin
+  // does not say anything about this plugin's hooks. Unusual review shapes
+  // keep the whole-review check.
+  const verifyCodexPluginHookClosure = (root: string, identity: { marketplace: string; name: string }, marketplaceSource: string, servers: ReadonlySet<string>, declarations: readonly string[]): void => {
+    const retained = exclusion!.retained!;
+    if (retained.codexSemanticCache || retained.codexInstallationInputs || retained.codexRetiredMaterializations) return verifyOpaqueClosure(declarations);
+    const within = (base: string, path: string): boolean => path === base || path.startsWith(base + sep);
+    const executables: string[] = [];
+    for (const server of servers) {
+      const row = config.mcp_servers?.[server];
+      if (server === "codex_apps" || server === "_codex_apps" || !isCodexLocalStdioMcpServer(server, row)) unresolved("plugin hook MCP server is not a configured local stdio server");
+      for (const value of [row.command, ...(row.args ?? [])] as string[]) for (const candidate of [value, value.slice(value.indexOf("=") + 1)]) {
+        if (!isAbsolute(candidate) || /[\0$]/.test(candidate) || executables.length >= AGENT_POLICY_LIMITS.discoveryRoots) continue;
+        const path = canonical(candidate);
+        if (lstatSync(path, { throwIfNoEntry: false })?.isFile()) executables.push(path);
+      }
+    }
+    const cacheRoot = canonical(join(nativeHome, "plugins/cache"));
+    const ownCache = canonical(join(nativeHome, "plugins/cache", identity.marketplace, identity.name));
+    const ownCatalog = canonical(join(marketplaceSource, ".agents/plugins/marketplace.json"));
+    const account = canonical(home);
+    const marketplaceRoots = (Object.values(config.marketplaces ?? {}) as any[])
+      .filter(market => market?.source_type === "local" && typeof market.source === "string" && isAbsolute(market.source))
+      .map(market => canonical(market.source)).filter(path => !within(path, account));
+    const otherPlugin = (path: string): boolean => !within(root, path) && !within(ownCache, path) && path !== ownCatalog && !executables.includes(path)
+      && (within(cacheRoot, path) || marketplaceRoots.some(base => within(base, path)));
+    const sources = retained.sources.filter(source => source.path !== canonical(configPath) && !otherPlugin(source.path));
+    if (sources.some(source => source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || source.reviewArtifact !== undefined
+      || ![undefined, "bytes", "path-bytes", "executable-v1"].includes(source.hashMode))) return verifyOpaqueClosure(declarations);
+    // The declarations, and their reviewed installed copies, are not evidence
+    // of what the hooks run.
+    const declared = declarations.map(path => relative(root, path));
+    const declaration = (path: string): boolean => declarations.includes(path)
+      || path.startsWith(ownCache + sep) && declared.includes(path.slice(ownCache.length + 1).split(sep).slice(1).join(sep));
+    if (!sources.some(source => !declaration(source.path) && source.sha256 !== null)) unresolved("opaque executable dependency closure is unavailable");
+    for (const source of sources) if (projected(source, undefined, budget) !== source.sha256) {
+      throw new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    }
+    verifyDiscoveryDirectories((retained.directories ?? []).filter(directory => !otherPlugin(directory.path)));
+  };
+  // An unreadable declaration returns null, which keeps the whole-review check.
+  const readCodexHookDeclaration = (text: string | null, path: string): ReturnType<typeof codexPluginHookHandlers> => {
+    if (text === null) return null;
+    try { return codexPluginHookHandlers(parseConfig(text, path)); } catch { return null; }
+  };
+  function plugin(root: string, codex?: { marketplace: string; name: string; source: string }): void {
     root = canonical(root); safe(root);
     if (exclusion) roots.add(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
@@ -1456,18 +1563,37 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (manifest.hooks !== undefined || hooks !== null) {
       if (!exclusion || exclusion.retained?.method !== "reviewed") unresolved("plugin hooks require a separate no-skill-injection review");
       const required = [manifestPath, ...(hooks !== null ? [join(root, "hooks/hooks.json")] : [])];
+      // Codex authoring exclusion reads each declaration: hooks/hooks.json, a
+      // manifest target, or hooks declared inline in the manifest (as
+      // chrome@openai-bundled does). An inline declaration lives in the
+      // manifest, which is already a required reviewed source.
+      const scoped = agent === "codex" && codex !== undefined ? [] as Array<ReturnType<typeof codexPluginHookHandlers>> : undefined;
       if (manifest.hooks !== undefined) {
-        if (typeof manifest.hooks !== "string") unresolved("unsupported plugin hooks target");
-        const hook = resolve(root, manifest.hooks);
-        if (!hook.startsWith(root + sep)) unresolved("plugin hooks target escapes its root");
-        required.push(hook);
+        if (scoped && manifest.hooks && typeof manifest.hooks === "object" && !Array.isArray(manifest.hooks)) {
+          const inline = codexPluginHookHandlers(manifest.hooks);
+          if (!inline) unresolved("unsupported inline plugin hooks");
+          scoped.push(inline);
+        } else {
+          if (typeof manifest.hooks !== "string") unresolved("unsupported plugin hooks target");
+          const hook = resolve(root, manifest.hooks);
+          if (!hook.startsWith(root + sep)) unresolved("plugin hooks target escapes its root");
+          required.push(hook);
+          if (scoped) scoped.push(readCodexHookDeclaration(witness(hook), hook));
+        }
       }
+      if (scoped && hooks !== null) scoped.push(readCodexHookDeclaration(hooks, join(root, "hooks/hooks.json")));
       for (const path of required) {
         const saved = exclusion!.retained!.sources.filter(source => source.path === canonical(path)
           && source.sha256 !== null && source.format === undefined && source.fields === undefined);
-        if (!saved.length || saved.some(source => projected(source, undefined, budget) !== source.sha256)) unresolved("plugin hooks require current independently reviewed sources");
+        if (saved.length ? saved.some(source => projected(source, undefined, budget) !== source.sha256)
+          : !(scoped && reviewedInstalledCopy(root, path, codex!))) unresolved("plugin hooks require current independently reviewed sources");
       }
-      verifyOpaqueClosure(required.map(path => canonical(path)));
+      // Hooks that only call MCP tools carry structured input, never command
+      // text, so their closure is the plugin's own reviewed evidence. Command
+      // handlers and unreadable declarations keep the whole-review check.
+      if (scoped && scoped.every(item => item !== null && item.commands === 0)) {
+        verifyCodexPluginHookClosure(root, codex!, codex!.source, new Set(scoped.flatMap(item => [...item!.servers])), required.map(path => canonical(path)));
+      } else verifyOpaqueClosure(required.map(path => canonical(path)));
     }
     const commands = join(root, "commands"); safe(commands);
     if (agent === "claude" && (manifest.commands !== undefined || (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length))) unresolved("legacy command discovery requires retirement or a dedicated format adapter");
@@ -1507,7 +1633,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (catalogText === null) unresolved("marketplace catalog missing");
       const catalog = parseConfig(catalogText!, join(market.source, ".agents/plugins/marketplace.json")), matches = Array.isArray(catalog.plugins) ? catalog.plugins.filter((item: any) => item.name === name) : [];
       if (matches.length !== 1 || matches[0]?.source?.source !== "local" || typeof matches[0]?.source?.path !== "string") unresolved("plugin catalog source is missing or ambiguous");
-      plugin(resolve(market.source, matches[0].source.path));
+      plugin(resolve(market.source, matches[0].source.path), exclusion ? { marketplace, name, source: market.source } : undefined);
     }
   } else if (agent === "opencode") {
     if (witness(join(home, ".config/opencode/opencode.jsonc")) !== null || witness(join(home, ".config/opencode/config.json")) !== null) unresolved("additional config layers require review");
