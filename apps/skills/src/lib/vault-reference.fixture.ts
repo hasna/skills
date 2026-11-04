@@ -3,7 +3,6 @@ import * as childProcess from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SecretsSdk } from "./execution-secrets.js";
 const scratch = mkdtempSync(join(tmpdir(), "vault-ref-"));
 const skillsFile = join(scratch, ".hasna/skills/config/credentials");
 const secretsFile = join(scratch, ".hasna/secrets/config/credentials");
@@ -24,11 +23,10 @@ mock.module("node:child_process", () => ({ ...childProcess, spawnSync: (...args:
   keychainReads++;
   return { status: locked ? 36 : 44, stdout: "", stderr: locked ? "Keychain locked" : "The specified item could not be found." };
 } }));
-// Typed locally: Skills typechecks without the optional @hasna/secrets (SH-00058).
-const { createSecretsClientFromEnv } = await import("@hasna/secrets/sdk" as string) as SecretsSdk;
+const { createSecretsClientFromEnv } = await import("@hasna/secrets/sdk");
 // The fixture observes the loader boundary separately from the unmocked CLI
 // test. The SDK provider, transport and HTTP implementation remain real.
-mock.module("@hasna/secrets", () => ({ createSecretsClientFromEnv: (...args: Parameters<SecretsSdk["createSecretsClientFromEnv"]>) => {
+mock.module("@hasna/secrets", () => ({ createSecretsClientFromEnv: (...args: Parameters<typeof createSecretsClientFromEnv>) => {
   factories++;
   return createSecretsClientFromEnv(...args);
 } }));

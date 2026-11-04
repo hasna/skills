@@ -23,10 +23,10 @@ export interface SelectedSecretScope {
   cwd: string;
 }
 /**
- * The part of the @hasna/secrets SDK entry Skills uses. It is typed here rather
- * than imported, so Skills typechecks and builds without the optional package;
- * src/lib/secrets-sdk-types.test.ts checks it against the real package wherever
- * that is installed.
+ * The part of the @hasna/secrets SDK entry Skills uses. Skills typechecks and
+ * builds without the optional package: src/types/hasna-secrets-sdk.d.ts declares
+ * this much of the module, and src/lib/secrets-sdk-types.test.ts checks both
+ * against the real package wherever that is installed.
  */
 export interface SecretsSdk {
   createSecretsClientFromEnv(env?: Record<string, string | undefined>): SelectedSecretsClient;
@@ -35,10 +35,9 @@ export interface SecretsSdk {
  * The independently configured Secrets SDK. @hasna/secrets is an optional
  * dependency that only an install with access to it receives (SH-00058), and
  * the build keeps it external, so it is loaded here, when a vault grant needs
- * it, and nowhere else. The specifier stays a literal for the bundler; `as
- * string` only keeps the type checker from resolving the optional package.
+ * it, and nowhere else.
  */
-export async function defaultSecretsClientFactory(load: () => Promise<SecretsSdk> = () => import("@hasna/secrets/sdk" as string)): Promise<() => SelectedSecretsClient> {
+export async function defaultSecretsClientFactory(load: () => Promise<SecretsSdk> = () => import("@hasna/secrets/sdk")): Promise<() => SelectedSecretsClient> {
   let sdk: SecretsSdk;
   try { sdk = await load(); }
   catch { return refuse("LOCAL_SECRET_UNAVAILABLE", "Vault secret bindings need the optional @hasna/secrets package, which this install could not load. Install @hasna/secrets with access to it, then run again."); }

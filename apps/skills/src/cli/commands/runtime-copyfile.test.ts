@@ -413,31 +413,35 @@ process.exit(code);
     } finally { fixture.server.stop(true); }
   }, 120_000);
 
+  // A Hasna dependency whose own range conflicts with Skills' pin keeps a nested
+  // closure. Public packages only: the private @hasna/secrets this case used is
+  // refused to the credential-free installer (SH-00058).
   test("real npm conflicting Hasna dependency versions retain nested closure without changing archive payload", async () => {
     const f = fixtureHome();
-    const fixture = await serverWithArtifact({ "@hasna/contracts": "1.3.5", "@hasna/secrets": "0.4.2" });
+    const fixture = await serverWithArtifact({ "@hasna/events": "0.1.18", "commander": "12.1.0" });
     try {
       const result = await updateCopyfileRuntime("0.10.8", {
         homeDir: f.home, pathValue: `${f.localBin}${delimiter}${f.bunBin}`,
         registryOrigin: fixture.server.url.origin, minReleaseAge: 7,
-        minReleaseAgeExclude: ["@hasna/contracts", "@hasna/secrets"],
+        minReleaseAgeExclude: ["@hasna/events"],
       });
       const target = join(f.runtime, "0.10.8-copyfile");
       const packageRoot = join(target, "node_modules", "@hasna", "skills");
-      const nestedSecrets = join(packageRoot, "node_modules", "@hasna", "secrets");
-      expect(JSON.parse(readFileSync(join(nestedSecrets, "package.json"), "utf8")).version).toBe("0.4.2");
-      expect(lstatSync(join(packageRoot, "node_modules", ".bin", "secrets")).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(readFileSync(join(target, "node_modules", "commander", "package.json"), "utf8")).version).toBe("12.1.0");
+      const nested = join(target, "node_modules", "@hasna", "events", "node_modules", "commander");
+      expect(Bun.semver.satisfies(JSON.parse(readFileSync(join(nested, "package.json"), "utf8")).version, "^13.1.0")).toBe(true);
+      expect(lstatSync(join(target, "node_modules", ".bin", "events")).isSymbolicLink()).toBe(true);
       const lock = JSON.parse(readFileSync(join(target, "install-lock.json"), "utf8"));
-      expect(lock.packages["node_modules/@hasna/skills/node_modules/@hasna/secrets"].version).toBe("0.4.2");
+      expect(Bun.semver.satisfies(lock.packages["node_modules/@hasna/events/node_modules/commander"].version, "^13.1.0")).toBe(true);
       const receipt = JSON.parse(readFileSync(join(target, "rollout-receipt.json"), "utf8"));
       expect(receipt.tarballIntegrity).toBe(fixture.integrity);
       expect(receipt.runtimeTreeSha256).toMatch(/^[a-f0-9]{64}$/);
       for (const [path, content] of f.configs) expect(readFileSync(path, "utf8")).toBe(content);
       expect(pinnedTarget(join(f.localBin, "skills"))).toBe(join(packageRoot, BIN.skills));
-      const original = readFileSync(join(nestedSecrets, "package.json"));
-      writeFileSync(join(nestedSecrets, "package.json"), Buffer.concat([original, Buffer.from("\n ")]));
+      const original = readFileSync(join(nested, "package.json"));
+      writeFileSync(join(nested, "package.json"), Buffer.concat([original, Buffer.from("\n ")]));
       expect(() => rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toThrow("ACTIVE_RUNTIME_TREE_DRIFT");
-      writeFileSync(join(nestedSecrets, "package.json"), original);
+      writeFileSync(join(nested, "package.json"), original);
       expect(rollbackCopyfileRuntime(String(result.receiptId), { homeDir: f.home })).toMatchObject({ rolledBack: true });
     } finally { fixture.server.stop(true); }
   }, 120_000);
