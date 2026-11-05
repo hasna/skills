@@ -8,7 +8,7 @@ import { findCloseSkillNames } from "./search.js";
 import { readSelectedDocument } from "./selected-document.js";
 import {
   activateSelectionProfile, assertFreshCachedProfile, cacheSelectionBundle, projectSelectionLockPath,
-  readCachedSelection, readProjectSelectionSnapshot, readSelectionProfile, readSkillSessionSnapshotIfExists, selectionKey,
+  readCachedSelection, readProjectSelectionSnapshot, readSelectionProfile, readSelectionProfileSnapshot, readSkillSessionSnapshotIfExists, selectionKey, selectionProfilePrecondition,
   skillSessionSnapshotBinding, SkillSelectionError, validateResolvedProfile, writeSelectionJson, writeSkillSession,
   type CachedSelectionProfile, type SelectionCacheOptions, type SkillSessionParentBinding, type SkillSessionProjectLock, type SkillSessionReceipt,
 } from "./selection-cache.js";
@@ -33,13 +33,29 @@ export interface SyncSelectionProfileOptions extends SelectionCacheOptions {
   projectDir?: string;
   stationId?: string;
   check?: boolean;
+  /**
+   * The SHA-256 of the cached profile bytes the caller preserved, or null when
+   * it expects no cached profile. Sync then refuses with
+   * SELECTION_PROFILE_CHANGED, before any download, unless the profile it reads
+   * is exactly that state; activation itself refuses any later change.
+   */
+  expectedProfileSha256?: string | null;
 }
 export async function syncSelectionProfile(profileId: string, options: SyncSelectionProfileOptions = {}) {
   const client = options.client ?? await createProfileClient();
   const profile = await client.resolveProfile(profileId);
   validateResolvedProfile(profile, client.authority);
   if (profile.profileId !== profileId) throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "The API returned a different selection profile.");
-  const previous = readSelectionProfile(profileId, options);
+  const expected = options.expectedProfileSha256;
+  if (expected !== undefined && expected !== null && (typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected))) {
+    throw new SkillSelectionError("INVALID_PROFILE_PRECONDITION", "The expected cached profile must be a lowercase SHA-256 digest, or absent.");
+  }
+  // This read is the snapshot activation compares against under the profile write lock.
+  const snapshot = readSelectionProfileSnapshot(profileId, options);
+  if (expected !== undefined && (snapshot?.sha256 ?? null) !== expected) {
+    throw new SkillSelectionError("SELECTION_PROFILE_CHANGED", "The cached Skills profile is not the expected snapshot; nothing was written. Preserve the current profile and name its SHA-256.");
+  }
+  const previous = snapshot?.receipt ?? null;
   const changed = !previous || JSON.stringify(previous.profile) !== JSON.stringify(profile);
   let downloaded = 0;
   for (const selection of profile.selections) {
@@ -51,7 +67,7 @@ export async function syncSelectionProfile(profileId: string, options: SyncSelec
   }
   if (options.check) return { profile, receipt: previous, changed: changed || downloaded > 0, downloaded, stationReported: false };
   // Only activation is mutable. Every object has been verified before this pointer moves.
-  const receipt = activateSelectionProfile(profile, options);
+  const receipt = activateSelectionProfile(profile, selectionProfilePrecondition(snapshot), options);
   if (options.projectDir) writeSelectionJson(projectSelectionLockPath(options.projectDir), receipt);
   let stationReported = false;
   if (options.stationId) {

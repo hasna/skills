@@ -94,7 +94,7 @@ function fixtureFor(options: {
   authority = `${origin}/api/v1`;
   const home = mkdtempSync(join(scratch, "home-")), data = join(home, ".hasna", "skills"), cacheDir = join(data, "selection-cache");
   const sessionId = "provenance-fixture";
-  if (options.syncSnapshot) activateSelectionProfile(profile(SELECTED, SELECTED_VERSIONS, authority), { cacheDir, now: () => Date.parse("2026-01-03T00:00:00Z") });
+  if (options.syncSnapshot) activateSelectionProfile(profile(SELECTED, SELECTED_VERSIONS, authority), null, { cacheDir, now: () => Date.parse("2026-01-03T00:00:00Z") });
   if (options.writeSession) {
     const pin = options.writeSession;
     const pinned = profile(pin.profileRevision ?? PINNED, PINNED_VERSIONS, pin.authority ?? authority, pin.workspaceId ?? WORKSPACE);

@@ -51,7 +51,7 @@ async function fixture(specs: Spec[] = SPECS) {
     authority: AUTHORITY, workspaceId: "org-test", profileRevision: "r1", slug, version: "1.0.0", bundleDigest: `sha256:${bundle.sha256}`,
     ...(triggers === null ? {} : { triggers: triggers ?? { keywords: [slug] } }), ...(aliases ? { aliases } : {}),
   })) };
-  activateSelectionProfile(profile, { cacheDir });
+  activateSelectionProfile(profile, null, { cacheDir });
   await cacheSelectionBundle(profile.selections[0]!, new Response(bundle.bytes), { cacheDir });
   const options = { cacheDir, cached: true, authority: AUTHORITY };
   const select = async (prompt: string, extra: Record<string, unknown> = {}) => buildSkillContext({ profileId: "fleet", prompt, ...extra }, options);

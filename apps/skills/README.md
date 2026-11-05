@@ -1694,6 +1694,21 @@ for the named station; it is not a native-folder snapshot in this mode.
 `skills install --selection-profile default` without skill names also syncs the
 whole selection.
 
+Activation replaces the cached profile only while it is still the exact file
+the sync read: same bytes (SHA-256) and same inode, compared under the profile's
+write lock (`<profile>.json.write-lock` beside it), which every activation
+takes (sync, install, pull and reconcile). If another writer replaced the profile in the meantime, the
+sync refuses with `SELECTION_PROFILE_CHANGED` and writes no profile; verified
+bundle objects it already added stay, since they are immutable. To bind a
+profile you preserved beforehand, pass its digest:
+`skills sync --selection-profile default --expect-profile-sha256 <sha256>`
+(`absent` when none should be cached); a different cached profile is refused
+before any download. A held lock is waited for up to two seconds, then the sync
+refuses with `PROFILE_WRITE_BUSY` and leaves the lock in place. Readers never
+take the lock. A dead writer's lock is recovered only as for session locks
+below: after 30 seconds, when its host, boot and process identity prove it is
+gone, it is moved, never deleted, to `selection-cache/profile-lock-recoveries`.
+
 ### Reading provenance instead of trusting one record
 
 Applying a record is not adoption, and the four facts below are different. Only
