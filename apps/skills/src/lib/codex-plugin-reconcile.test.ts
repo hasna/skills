@@ -84,12 +84,16 @@ function fakeCodexWriter(config: string, behaviour: { unavailable?: boolean; ref
  * station shape: a typed settings witness and qualified-name controls).
  * `listed`: Codex listed the skills at enrollment. Otherwise they were already
  * path-denied and omitted. Either way the controls record the remote installation. */
-function enrolledStation(initialNames = ["maintain-space", "write-page"], extraConfig = "", listed = true, shape: { catalogReview?: boolean; byteWitnesses?: boolean; directories?: boolean; prepare?: (cache: string) => void; witnesses?: (cache: string) => string[] } = {}) {
+function enrolledStation(initialNames = ["maintain-space", "write-page"], extraConfig = "", listed = true, shape: { catalogReview?: boolean; byteWitnesses?: boolean; directories?: boolean; prepare?: (cache: string) => void; witnesses?: (cache: string) => string[]; aliasedCodexHome?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "skills-codex-reconcile-")); roots.push(home);
-  admitCorpusFixture(join(home, ".codex"));
-  const dataDir = join(home, "data"), cache = join(home, ".codex/plugins/cache"), parent = join(cache, "openai-curated-remote/pages");
-  const config = join(home, ".codex/config.toml"), policy = join(dataDir, "agent-policy.json");
-  const bridge = join(home, ".codex/skills/skills-cli/SKILL.md");
+  // aliasedCodexHome: ~/.codex is a symlink to a folder inside the home (station02's shape),
+  // recorded as a root alias when the bridge was installed; every reviewed path is its target.
+  const codexHome = shape.aliasedCodexHome ? join(home, "workspace/.codex") : join(home, ".codex");
+  admitCorpusFixture(codexHome);
+  if (shape.aliasedCodexHome) symlinkSync(codexHome, join(home, ".codex"));
+  const dataDir = join(home, "data"), cache = join(codexHome, "plugins/cache"), parent = join(cache, "openai-curated-remote/pages");
+  const config = join(codexHome, "config.toml"), policy = join(dataDir, "agent-policy.json");
+  const bridge = join(codexHome, "skills/skills-cli/SKILL.md");
   const materialize = (version: string, names: string[], manifest: Record<string, unknown> = {}, files: Record<string, string> = {}) => {
     const root = join(parent, version);
     put(join(root, ".codex-plugin/plugin.json"), JSON.stringify({ name: "pages", version, description: "Synthetic Pages plugin", apps: "./.app.json", ...manifest }));
@@ -109,13 +113,14 @@ function enrolledStation(initialNames = ["maintain-space", "write-page"], extraC
   const byteSources = captureDiscoveryByteSources([...(shape.byteWitnesses ? [join(first, ".codex-plugin/plugin.json"), join(first, ".app.json"), ...initialNames.map(name => join(first, "skills", name, "SKILL.md"))] : []), ...(shape.witnesses?.(cache) ?? [])]);
   const review = { version: 1 as const, agents: [{ agent: "codex" as const, roots: [cache], sources: [captureCodexSettingsV3(config), ...byteSources], ...(shape.directories ? { directories: captureDiscoveryDirectories([cache]) } : {}), pluginHooks: "reviewed-no-skill-injection" as const }] };
   // catalogReview false: the older binding shape that never recorded an installed-plugin catalog review.
-  applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], ...(shape.catalogReview === false ? {} : { codexNativeCatalog: { ...enrollment, remoteReceipts: captureCodexRemoteReceiptSnapshot(cache) } }), discoveryInputs: review }));
+  applyAgentIntegration(planAgentIntegration({ home, dataDir, projectDir: home, agents: ["codex"], ...(shape.catalogReview === false ? {} : { codexNativeCatalog: { ...enrollment, remoteReceipts: captureCodexRemoteReceiptSnapshot(cache) } }), discoveryInputs: review, ...(shape.aliasedCodexHome ? { allowRootAliases: true } : {}) }));
   const options = { home, dataDir, projectDir: home };
   /** What Codex reports after a refresh: enabled (undenied) skills plus the bridge. */
   const catalog = (enabled: CodexNativeSkill[], overrides: Partial<CodexNativeSkillCatalog> = {}): CodexNativeSkillCatalog => ({ version: "codex-cli 0.163.0", cwd: home, plugins: [plugin],
     skills: [{ name: "skills-cli", path: bridge, enabled: true, pluginId: null }, ...enabled], ...overrides });
   const skill = (root: string, name: string, pluginId = PLUGIN, namespace = "pages"): CodexNativeSkill => ({ name: `${namespace}:${name}`, path: join(root, "skills", name, "SKILL.md"), enabled: true, pluginId });
-  const writer = fakeCodexWriter(config);
+  // Codex reports its default ~/.codex lexically, alias or not.
+  const writer = fakeCodexWriter(shape.aliasedCodexHome ? join(home, ".codex/config.toml") : config);
   const run = (apply: boolean, value: CodexNativeSkillCatalog, connect: ReturnType<typeof fakeCodexWriter>["connect"] = writer.connect) => runCodexPluginReconcile({ apply, home, dataDir, projectDir: home, captureCatalog: async () => value, connect });
   const snapshot = () => ({ config: readFileSync(config, "utf8"), policy: readFileSync(policy, "utf8"), migrations: existsSync(join(dataDir, "migration")) ? readdirSync(join(dataDir, "migration")).sort() : [] });
   return { home, dataDir, cache, parent, config, policy, bridge, first, plugin, options, materialize, catalog, skill, run, snapshot, writer };
@@ -163,6 +168,28 @@ for (const listed of [true, false]) test(`a plugin version bump that adds 3 skil
   const again = await station.run(true, station.catalog([]));
   expect(again).toMatchObject({ outcome: "unchanged", enrolled: [], counts: { enrolled: 0, alreadyEnrolled: 5, allowed: 1 }, changes: [] });
   expect(station.snapshot()).toEqual(settled);
+});
+
+// SO-00005: on station02 ~/.codex is a symlink into a workspace, recorded as a root alias
+// in the binding. The reconcile plan ignored that alias and refused every preview with
+// «Refusing symlink native discovery input: ~/.codex», so a curated plugin update could
+// never be enrolled there.
+test("a symlinked ~/.codex recorded as a root alias reconciles a skills-only plugin update", async () => {
+  const station = enrolledStation(undefined, "", true, { aliasedCodexHome: true });
+  expect(JSON.parse(readFileSync(station.policy, "utf8")).bridge.rootAliases.map((alias: { agent: string }) => alias.agent)).toEqual(["codex"]);
+  expect(() => assertManagedAgentBridge("codex", station.options)).not.toThrow();
+  const root = refresh(station, "1.1.0", BUMPED);
+  const catalog = station.catalog(["manage-schedules", "organize-space", "publish-page"].map(name => station.skill(root, name)));
+  const before = station.snapshot();
+  const preview = await station.run(false, catalog);
+  expect(preview.code).toBeUndefined();
+  expect(preview).toMatchObject({ mode: "preview", outcome: "planned", enrolled: NEW, counts: { enrolled: 3, alreadyEnrolled: 2 } });
+  expect(station.snapshot()).toEqual(before);
+  const applied = await station.run(true, catalog);
+  expect(applied.code).toBeUndefined();
+  expect(applied).toMatchObject({ mode: "apply", outcome: "applied", enrolled: NEW });
+  expect(() => assertManagedAgentBridge("codex", station.options)).not.toThrow();
+  expect(JSON.parse(readFileSync(station.policy, "utf8")).bridge.rootAliases.map((alias: { agent: string }) => alias.agent)).toEqual(["codex"]);
 });
 
 test("a manifest version-only change with the same names needs nothing and the guard passes", async () => {

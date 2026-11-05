@@ -1741,7 +1741,9 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   if (savedDiscovery?.codexSemanticCache) throw new CodexPluginReconcileRefusal("CODEX_RECONCILE_SEMANTIC_CACHE_UNSUPPORTED", "this binding uses the semantic cache witness, which binds the complete name set; refresh it with a fresh skills hook install review");
   const input: CodexPluginReconcileInput = { copies: copies.map(copy => ({ path: copy.entry.path, hash: copy.entry.hash })).sort((a, b) => a.path.localeCompare(b.path)), names,
     parents: [...priorParents, ...enrollableParents].sort(), remoteIdentities, nameDenies: [...nameDenies].sort(), pathDenies: [...pathDenies].sort(), ...(discovery ? { discovery } : {}) };
-  const plan = planAgentIntegration({ home, dataDir, projectDir, agents: ["codex"], codexNativeCatalog: catalog, codexReconcile: input });
+  // The binding's recorded root aliases were rechecked by the custody above; the
+  // plan must resolve through the same aliases, or a symlinked ~/.codex reads as drift.
+  const plan = planAgentIntegration({ home, dataDir, projectDir, agents: ["codex"], codexNativeCatalog: catalog, codexReconcile: input, allowRootAliases: aliases.length > 0 });
   assertCodexReconcileScope(plan, { configPath, policyPath, prior, names, remoteIdentities, discovery: discovery ?? savedDiscovery! });
   const configChange = plan.changes.find(change => resolve(change.path) === configPath);
   // Append-only is enforced by the scope check above, so the new rows are the tail.
@@ -2022,7 +2024,8 @@ async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, opt
       const uncertain = (reason: string) => new Error(`CODEX_RECONCILE_NATIVE_WRITE_UNCERTAIN: ${reason}; the policy was not written (private backup: ${backupRoot}); config.toml ${codexConfigStructureEqual(currentText(configChange.path), configChange.after) ? "holds" : "may still receive"} this run's deny rows: ${rows}. Run the reconcile again: it finishes the policy once Codex reports those skills disabled`);
       let result: any;
       try {
-        result = await rpc!.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.after) ?? [], mergeStrategy: "replace" }], filePath: configChange.path, expectedVersion, reloadUserConfig: true });
+        // Address Codex's file as Codex reported it (config/read above): its default ~/.codex stays lexical even when it is a root alias.
+        result = await rpc!.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.after) ?? [], mergeStrategy: "replace" }], filePath: nativeConfigPath, expectedVersion, reloadUserConfig: true });
       } catch (error) {
         // Only Codex's own error answer is a refusal: it refuses before writing
         // (an expectedVersion conflict included). A timeout or a lost app-server
@@ -2034,7 +2037,7 @@ async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, opt
       if (typeof result?.version === "string" && /^sha256:[a-f0-9]{64}$/.test(result.version)) nativeVersion = result.version;
       // Without Codex's new version the write can be neither verified nor restored through Codex.
       if (!nativeVersion) throw uncertain("Codex answered the config write without a valid config version");
-      if (result?.status !== "ok" || result.filePath !== configChange.path) throw new Error("CODEX_RECONCILE_NATIVE_WRITE_OVERRIDDEN: Codex did not confirm a plain user-layer write of the deny rows (another configuration layer may override them)");
+      if (result?.status !== "ok" || result.filePath !== nativeConfigPath) throw new Error("CODEX_RECONCILE_NATIVE_WRITE_OVERRIDDEN: Codex did not confirm a plain user-layer write of the deny rows (another configuration layer may override them)");
       // Readback: the file must hold exactly the planned configuration.
       if (!codexConfigStructureEqual(currentText(configChange.path), configChange.after)) throw new Error("CODEX_RECONCILE_NATIVE_READBACK_FAILED: config.toml after Codex's write differs from the planned configuration");
     }
@@ -2073,7 +2076,7 @@ async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, opt
         const layers = (await rpc.request("config/read", { includeLayers: true, cwd: home }))?.layers?.filter((layer: any) => layer?.name?.type === "user" && layer.name.file === nativeConfigPath && !layer.name.profile);
         if (layers?.length !== 1 || layers[0].version !== nativeVersion) incomplete = "config.toml changed after this run's write, so its deny rows were left in place";
         else {
-          const restored = await rpc.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.before), mergeStrategy: "replace" }], filePath: configChange.path, expectedVersion: nativeVersion, reloadUserConfig: true });
+          const restored = await rpc.request("config/batchWrite", { edits: [{ keyPath: "skills.config", value: codexSkillRows(configChange.before), mergeStrategy: "replace" }], filePath: nativeConfigPath, expectedVersion: nativeVersion, reloadUserConfig: true });
           if (restored?.status !== "ok" || !codexConfigStructureEqual(currentText(configChange.path), configChange.before)) incomplete = "Codex did not restore config.toml to its preimage";
         }
       } catch { incomplete = "Codex did not confirm the restore of config.toml (it refused or did not answer), so its deny rows may remain"; }
