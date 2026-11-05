@@ -58,6 +58,18 @@ export function discoveryRootUnresolved(agent: IntegrationAgent, command: string
 export function isDiscoveryRootUnresolved(error: unknown): error is Error {
   return error instanceof Error && error.message.startsWith(`${DISCOVERY_ROOT_UNRESOLVED}: `);
 }
+/** A native configuration Skills cannot resolve. The message names the
+ * --discovery-inputs option of the native commands that accept it (hook
+ * install, migrate native). Portable authoring takes no such option and
+ * rewrites the remedy from these fields: `reviewable` marks a hook, plugin hook
+ * or plugin option check that a current discovery review satisfies, and
+ * `source` names the configuration or hook file it checked (a path only). */
+export class NativeDiscoveryUnresolved extends Error {
+  reviewable = false;
+  constructor(readonly agent: IntegrationAgent, readonly detail: string, public source?: string) {
+    super(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`);
+  }
+}
 /** The runtime executable a discovery review resolved through PATH, with the
  * realpath its launcher led to. The policy stores it beside the binding
  * (bridge.discoveryExecutables), not inside it, so a consumer that compares
@@ -1206,7 +1218,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     : join(nativeHome, agent === "codex" ? "config.toml" : "settings.json");
   const configText = witness(configPath, agent === "hermes" ? "yaml" : agent === "codex" ? "toml" : "json", agent === "hermes" ? ["skills", "plugins", "hooks"] : agent === "claude" ? ["enabledPlugins", "extraKnownMarketplaces"] : agent === "codex" ? [...CODEX_DISCOVERY_PROJECTION_FIELDS] : agent === "gemini" ? ["skills", "extensions", "security"] : agent === "opencode" ? ["plugin", "skills"] : agent === "sumi" ? [...SUMI_DISCOVERY_PROJECTION_FIELDS] : ["version"]);
   const config: any = configText === null ? {} : agent === "hermes" ? parseHermesConfig(configText) : parseConfig(configText, configPath, agent === "codex");
-  const unresolved = (detail: string): never => { throw new Error(`Native discovery is unresolved (${agent}: ${detail}); provide a reviewed --discovery-inputs file`); };
+  const unresolved = (detail: string, source?: string): never => { throw new NativeDiscoveryUnresolved(agent, detail, source); };
   let opaqueClosureVerified = false;
   const verifyOpaqueClosure = (declarations: readonly string[]): void => {
     if (opaqueClosureVerified) return;
@@ -1220,6 +1232,14 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       && [undefined, "bytes", "path-bytes", "executable-v1"].includes(source.hashMode))) unresolved("opaque executable dependency closure is unavailable");
     verifyDiscovery(retained, undefined, undefined, undefined, exclusion?.narrowed, canonical(configPath));
     opaqueClosureVerified = true;
+  };
+  // Hook, plugin hook and plugin option checks that a current discovery review
+  // satisfies. The refusal is unchanged; it only carries what a remedy needs.
+  const reviewRemedy = (source: string, check: () => void): void => {
+    try { check(); } catch (error) {
+      if (error instanceof NativeDiscoveryUnresolved) { error.reviewable = true; error.source ??= source; }
+      throw error;
+    }
   };
   if (exclusion) {
     // Strict JSON syntax and collection limits come from the owning witness
@@ -1286,7 +1306,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         catch { return exclusion.narrowed?.accepts(source) === true; }
       })) unresolved(`non-enumerable ${label} require a current settings review`);
     };
-    if (hasHooks) verifyCurrentOpaqueSettings("hooks");
+    if (hasHooks) reviewRemedy(canonical(configPath), () => verifyCurrentOpaqueSettings("hooks"));
     if (agent === "claude") {
       if (config.env !== undefined) {
         if (!object(config.env) || Object.keys(config.env).length > 512) unresolved("malformed or unbounded Claude env controls");
@@ -1296,7 +1316,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         hasFunctionHookEnvironment = discoveryEnvironment.includes("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS");
         if (hasFunctionHookEnvironment) {
           if (!["0", "1"].includes(config.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS)) unresolved("malformed Claude env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS flag");
-          verifyCurrentOpaqueSettings("function-hook environment controls");
+          reviewRemedy(canonical(configPath), () => verifyCurrentOpaqueSettings("function-hook environment controls"));
         }
       }
       if (config.pluginConfigs !== undefined) {
@@ -1318,7 +1338,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         hasPluginConfigs = Object.keys(config.pluginConfigs).length > 0;
         // Options can feed executable plugin controls. Keep their complete
         // settings witness and the same reviewed closure required for hooks.
-        if (hasPluginConfigs) verifyCurrentOpaqueSettings("plugin configurations");
+        if (hasPluginConfigs) reviewRemedy(canonical(configPath), () => verifyCurrentOpaqueSettings("plugin configurations"));
       }
       if (config.enabledPlugins !== undefined && !object(config.enabledPlugins)) unresolved("enabledPlugins must be an object");
       if (config.extraKnownMarketplaces !== undefined) {
@@ -1401,7 +1421,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       }
     }
     if (Object.keys(config.enabledPlugins ?? config.plugins ?? config.extensions ?? {}).length > 512) unresolved("unbounded native registrations");
-    if (hasHooks || hasPluginConfigs || hasFunctionHookEnvironment) verifyOpaqueClosure([]);
+    if (hasHooks || hasPluginConfigs || hasFunctionHookEnvironment) reviewRemedy(canonical(configPath), () => verifyOpaqueClosure([]));
   }
 
   if (options.reviewed && (options.reviewed.version !== 1 || !Array.isArray(options.reviewed.agents) || options.reviewed.agents.some(item => !item || typeof item !== "object") || new Set(options.reviewed.agents.map(item => item.agent)).size !== options.reviewed.agents.length)) throw new Error("Invalid --discovery-inputs version or agents");
@@ -1638,7 +1658,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const manifest = raw === null ? {} : parseConfig(raw, manifestPath);
     if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
-    if (manifest.hooks !== undefined || hooks !== null) {
+    if (manifest.hooks !== undefined || hooks !== null) reviewRemedy(canonical(hooks !== null ? join(root, "hooks/hooks.json") : manifestPath), () => {
       if (!exclusion || exclusion.retained?.method !== "reviewed") unresolved("plugin hooks require a separate no-skill-injection review");
       const required = [manifestPath, ...(hooks !== null ? [join(root, "hooks/hooks.json")] : [])];
       // Codex authoring exclusion reads each declaration: hooks/hooks.json, a
@@ -1664,7 +1684,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
         const saved = exclusion!.retained!.sources.filter(source => source.path === canonical(path)
           && source.sha256 !== null && source.format === undefined && source.fields === undefined);
         if (saved.length ? saved.some(source => projected(source, undefined, budget) !== source.sha256)
-          : !(scoped && reviewedInstalledCopy(root, path, codex!))) unresolved("plugin hooks require current independently reviewed sources");
+          : !(scoped && reviewedInstalledCopy(root, path, codex!))) unresolved("plugin hooks require current independently reviewed sources", canonical(path));
       }
       // Hooks that only call MCP tools carry structured input, never command
       // text, so their closure is the plugin's own reviewed evidence. Command
@@ -1672,7 +1692,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
       if (scoped && scoped.every(item => item !== null && item.commands === 0)) {
         verifyCodexPluginHookClosure(root, codex!, codex!.source, new Set(scoped.flatMap(item => [...item!.servers])), required.map(path => canonical(path)));
       } else verifyOpaqueClosure(required.map(path => canonical(path)));
-    }
+    });
     const commands = join(root, "commands"); safe(commands);
     if (agent === "claude" && (manifest.commands !== undefined || (lstatSync(commands, { throwIfNoEntry: false })?.isDirectory() && entries(commands).length))) unresolved("legacy command discovery requires retirement or a dedicated format adapter");
     const rootSkill = witness(join(root, "SKILL.md"));
