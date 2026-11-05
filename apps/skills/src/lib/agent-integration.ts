@@ -35,6 +35,7 @@ import type { CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery
 import { assertClaudeHookEventsReplacement, type ClaudeCoordinatedHookEvent } from "./claude-settings-witness.js";
 import { directAliasTarget, snapshot as hookFileSnapshot, trustedAncestorOwner, unchanged as hookFileUnchanged } from "./codex-hook-trust-files.js";
 import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
+import { linuxAccessAclAbsent, withGlibcAclProbe } from "./linux-access-acl.js";
 import { planReviewArtifactRetention, verifyRetainedReviewArtifact, verifyReviewArtifactOriginal, writeReviewArtifactExclusive, type ReviewArtifactChange } from "./retained-review-artifacts.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
@@ -842,26 +843,11 @@ function hookProjectionRefusal(reason: string): never {
  * File snapshots and parent identities remain the authority for bytes/modes. */
 // Access ACLs change effective permissions independently of mode/group. This
 // writer does not copy ACLs: require verified absence on supported Linux/glibc.
-// A default ACL initializes direct children at creation, not existing descendants;
-// query it only for directories where the caller will create an object.
+// linux-access-acl.ts reads errno straight after each query and re-queries an
+// unexplained failure, so a stray errno overwrite no longer reads as
+// "unavailable" (SH-00084); a repeatable failure still refuses.
 function hasNoLinuxAccessAcl(fd: number, creationParent: boolean): boolean {
-  try {
-    const { dlopen, read, ptr } = require("bun:ffi") as typeof import("bun:ffi");
-    const library = dlopen("libc.so.6", {
-      fgetxattr: { args: ["i32", "ptr", "ptr", "u64"], returns: "i64" },
-      __errno_location: { args: [], returns: "ptr" },
-    });
-    try {
-      const errno = library.symbols.__errno_location(); if (!errno) return false;
-      for (const attribute of ["system.posix_acl_access", ...(creationParent ? ["system.posix_acl_default"] : [])]) {
-        const name = Buffer.from(attribute + "\0");
-        // Query presence only. No attribute value is read or copied. ENODATA is
-        // the only admitted result; unsupported ABI/filesystem/errors refuse.
-        if (Number(library.symbols.fgetxattr(fd, ptr(name), null, 0)) !== -1 || read.i32(errno) !== 61) return false;
-      }
-      return true;
-    } finally { library.close(); }
-  } catch { return false; }
+  return withGlibcAclProbe(probe => linuxAccessAclAbsent(probe, fd, creationParent));
 }
 
 export function assertNativePathAcl(path: string, observed: BigIntStats, options: { allowDenyOnly?: boolean; descriptor?: number; creationParent?: boolean } = {}): void {

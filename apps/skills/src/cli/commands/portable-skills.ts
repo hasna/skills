@@ -12,6 +12,16 @@ import {
   type SkillKind,
 } from "../../lib/portable-skills.js";
 
+export const AUTHORING_NATIVE_HOOKS_HELP = `
+Native hooks:
+  Authoring refuses while another agent's native hooks, plugin hooks or plugin
+  options are not covered by a current discovery review, because they could
+  load skills from the authoring corpus. The refusal names the agent and the
+  file it checked; review that agent's configuration with
+    skills hook install --agent <agent> --discovery-inputs <reviewed-file> --apply
+  and retry. Authoring commands themselves take no --discovery-inputs option.
+`;
+
 export function registerPortableSkillCommands(parent: Command) {
   parent
     .command("prepare")
@@ -21,6 +31,7 @@ export function registerPortableSkillCommands(parent: Command) {
     .option("--dry-run", "Validate the candidate and report its hash without changing the draft", false)
     .option("--json", "Output result as JSON", false)
     .description("Validate a reviewed draft and update its manifest version and content hash")
+    .addHelpText("after", AUTHORING_NATIVE_HOOKS_HELP)
     .action(async (name: string, options: { version: string; kind?: string; dryRun: boolean; json: boolean }) => {
       try {
         const result = prepareSkill(name, { ...options, kind: options.kind === undefined ? undefined : parseSkillKind(options.kind) });
@@ -48,6 +59,7 @@ export function registerPortableSkillCommands(parent: Command) {
     .option("-o, --overwrite", "Replace an existing portable skill folder", false)
     .option("--json", "Output result as JSON", false)
     .description("Scaffold a portable skill under ~/.hasna/skills/installed/<name>")
+    .addHelpText("after", AUTHORING_NATIVE_HOOKS_HELP)
     .action((name: string, options: { description?: string; kind: string; overwrite: boolean; json: boolean }) => {
       try {
         const kind = parseSkillKind(options.kind);
@@ -86,6 +98,7 @@ export function registerPortableSkillCommands(parent: Command) {
     .option("--allow-shadow", "Allow an imported name that shadows a bundled official skill", false)
     .option("--json", "Output result as JSON", false)
     .description("Import an existing skill folder into ~/.hasna/skills/installed/<name>")
+    .addHelpText("after", AUTHORING_NATIVE_HOOKS_HELP)
     .action((path: string, options: { name?: string; all: boolean; overwrite: boolean; allowShadow: boolean; json: boolean }) => {
       if (options.all) {
         handleBulkPort(path, options);
