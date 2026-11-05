@@ -23,7 +23,7 @@ import { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } 
 import { captureClaudeMarketplaceEntry, claudeMarketplaceEntrySourceValid } from "./claude-marketplace-entry-witness.js";
 import { claudeDiscoveryControlKeys, claudeDiscoveryEnvironmentKeys, readNativeDiscoveryWitnessFile, parseNativeJsonObject, hashNativeJsonControls, captureClaudeSettings, captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5, hashClaudeSettingsReplacement, hashClaudeSettingsReplacementV2, hashClaudeSettingsReplacementV3, hashClaudeSettingsReplacementV4, hashClaudeSettingsReplacementV5 } from "./claude-settings-witness.js";
 import { assertCodexHookDiscoveryRecovery, verifiesCodexHookDiscoverySource, type CodexHookDiscoveryRecovery } from "./codex-hook-discovery-recovery.js";
-import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, captureCodexSettingsV7, hashCodexSettingsReplacementV7, codexDiscoveryControlKeys, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
+import { hashCodexSettingsReplacement, hashCodexSettingsReplacementV2, hashCodexSettingsReplacementV3, hashCodexSettingsReplacementV4, hashCodexSettingsReplacementV5, captureCodexSettingsV7, hashCodexSettingsReplacementV7, captureCodexSettingsV8, hashCodexSettingsReplacementV8, codexDiscoveryControlKeys, CODEX_DISCOVERY_PROJECTION_FIELDS } from "./codex-settings-witness.js";
 import { narrowedLegacyWitnessMode, type NarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { absentDisabledCodexPluginParent, reviewedDisabledCodexPluginParent, reviewedRetiredCodexRoot, reviewedCodexPluginCapabilitiesUnchanged, reviewedCodexPluginSourceRoots, type CodexPluginSkillControl, type CodexPluginSourceInput } from "./codex-plugin-skill-controls.js";
 import { sumiConfigDirectory, sumiConfigPath } from "./agent-sumi.js";
@@ -33,7 +33,14 @@ import { verifyRetainedReviewArtifact, type RetainedReviewArtifact, type Reviewe
 import { captureCodexSemanticCacheWitness, assertCodexSemanticCacheWitnessUnchanged, type CodexSemanticCacheWitness, type CodexSemanticCacheAppOnlyParent, type CodexSemanticCacheReviewedHookParent } from "./codex-semantic-cache-witness.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-orphaned-at-v1" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-settings-v5" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "codex-settings-v6" | "codex-settings-v7" | "executable-v1" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; hookSources?: CodexReviewedHookSource[]; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
+export interface DiscoverySource { reviewArtifact?: RetainedReviewArtifact; path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-orphaned-at-v1" | "claude-plugin-manifest-v1" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1" | "claude-settings-v2" | "claude-settings-v3" | "claude-settings-v4" | "claude-settings-v5" | "claude-marketplace-registry-v2" | "codex-settings-v1" | "codex-settings-v2" | "codex-settings-v3" | "codex-settings-v4" | "codex-settings-v5" | "codex-settings-v6" | "codex-settings-v7" | "codex-settings-v8" | "executable-v1" | "sumi-settings-v1" | "claude-marketplace-entry-v1"; hookSources?: CodexReviewedHookSource[]; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[]; marketplace?: string; plugin?: string }
+/** Typed settings witnesses that bind the agent's own configuration file: a
+ * review or retained review naming one of these must name the configured
+ * source, never another file. */
+const SEMANTIC_SETTINGS_WITNESS_MODES: ReadonlySet<string> = new Set([
+  "sumi-settings-v1", "claude-settings-v1", "claude-settings-v2", "claude-settings-v3", "claude-settings-v4", "claude-settings-v5",
+  "codex-settings-v1", "codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5", "codex-settings-v6", "codex-settings-v7", "codex-settings-v8",
+]);
 export interface CodexSemanticCacheDiscovery {
   schema: "hasna.codex-semantic-cache-discovery.v1";
   configPath: string;
@@ -232,7 +239,7 @@ function isSupersededSettingsProjection(agent: IntegrationAgent, configPath: str
 }
 function supersedesSettingsProjection(agent: IntegrationAgent, sources: DiscoverySource[], configPath: string): boolean {
   if (agent === "sumi") return sources.some(source => source.path === configPath && source.hashMode === "sumi-settings-v1");
-  return agent === "codex" && sources.some(source => source.path === configPath && (source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7")));
+  return agent === "codex" && sources.some(source => source.path === configPath && (source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7" || source.hashMode === "codex-settings-v8")));
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
   if (source.reviewArtifact !== undefined) verifyRetainedReviewArtifact(source);
@@ -257,14 +264,16 @@ function projected(source: DiscoverySource, changes?: Map<string, string>, budge
     if (current !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
     return changes?.has(source.path) ? hashSumiSettingsReplacement(changes.get(source.path)!, budget) : current;
   }
-  // The narrowed V7 / v5 reviews: an exact digest of the discovery projection,
-  // with the same typed-metadata rules and the same verify-before-rebind order.
-  if (source.hashMode === "codex-settings-v7" || source.hashMode === "claude-settings-v5") {
+  // The narrowed V7 / V8 / v5 reviews: an exact digest of the discovery
+  // projection, with the same typed-metadata rules and the same
+  // verify-before-rebind order.
+  if (source.hashMode === "codex-settings-v7" || source.hashMode === "codex-settings-v8" || source.hashMode === "claude-settings-v5") {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Narrowed settings witnesses require exact typed metadata");
-    const codex = source.hashMode === "codex-settings-v7";
-    const current = (codex ? captureCodexSettingsV7 : captureClaudeSettingsV5)(source.path, budget).sha256;
+    const capture = source.hashMode === "codex-settings-v7" ? captureCodexSettingsV7 : source.hashMode === "codex-settings-v8" ? captureCodexSettingsV8 : captureClaudeSettingsV5;
+    const rebind = source.hashMode === "codex-settings-v7" ? hashCodexSettingsReplacementV7 : source.hashMode === "codex-settings-v8" ? hashCodexSettingsReplacementV8 : hashClaudeSettingsReplacementV5;
+    const current = capture(source.path, budget).sha256;
     if (current !== source.sha256) throw new NativeDiscoveryWitnessChange("input", source.path, `Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
-    return changes?.has(source.path) ? (codex ? hashCodexSettingsReplacementV7 : hashClaudeSettingsReplacementV5)(changes.get(source.path)!, budget) : current;
+    return changes?.has(source.path) ? rebind(changes.get(source.path)!, budget) : current;
   }
   if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5"))) {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Codex settings witnesses require exact typed metadata");
@@ -746,10 +755,15 @@ function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: Discov
 
   if (source.hashMode === "claude-plugin-manifest-v1" && (binding.agent !== "claude" || basename(source.path) !== "plugin.json" || !source.path.endsWith(join(sep, ".claude-plugin", "plugin.json")))) throw new Error("Claude plugin manifest witnesses require Claude plugin discovery");
   if (source.hashMode === "sumi-settings-v1" && (binding.agent !== "sumi" || binding.method !== "reviewed" || basename(source.path) !== "sumi.json")) throw new Error("Sumi settings witnesses require explicit reviewed Sumi configuration");
-  if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7")) && (binding.agent !== "codex" || binding.method !== "reviewed" || basename(source.path) !== "config.toml")) throw new Error("Codex settings witnesses require explicit reviewed Codex configuration");
+  if ((source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7" || source.hashMode === "codex-settings-v8")) && (binding.agent !== "codex" || binding.method !== "reviewed" || basename(source.path) !== "config.toml")) throw new Error("Codex settings witnesses require explicit reviewed Codex configuration");
   if ((source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || source.hashMode === "claude-settings-v4" || source.hashMode === "claude-settings-v5")) && (binding.agent !== "claude" || binding.method !== "reviewed" || basename(source.path) !== "settings.json")) throw new Error("Claude settings witnesses require explicit reviewed Claude configuration");
-  if ((source.hashMode === "claude-marketplace-registry" || source.hashMode === "claude-marketplace-registry-v2") && (binding.agent !== "claude" || binding.method !== "reviewed")) throw new Error("Claude marketplace witnesses require explicit reviewed Claude discovery");
-  if (source.hashMode === "claude-marketplace-entry-v1" && (binding.agent !== "claude" || binding.method !== "reviewed" || !claudeMarketplaceEntrySourceValid(source))) throw new Error("Claude marketplace entry witnesses require explicit reviewed Claude discovery of one named entry");
+  // A live binding may carry the registry too: its digest is content-based and
+  // normalized, and hook policies are only written from an explicit review.
+  if ((source.hashMode === "claude-marketplace-registry" || source.hashMode === "claude-marketplace-registry-v2") && binding.agent !== "claude") throw new Error("Claude marketplace witnesses require Claude discovery");
+  // A live binding may carry the entry as well: the digest is content-based, so
+  // a catalog refresh that changes what the plugin loads changes the binding,
+  // and a hook policy is only ever written from an explicit review.
+  if (source.hashMode === "claude-marketplace-entry-v1" && (binding.agent !== "claude" || !claudeMarketplaceEntrySourceValid(source))) throw new Error("Claude marketplace entry witnesses require Claude discovery of one named entry");
 }
 /** Typed settings classifications a planned write may adopt into the reviewed baseline. */
 const ADOPTABLE_SETTINGS_MATCHES: readonly CodexSettingsWitnessMatch[] = Object.freeze(["exact", "screen-reader-receipt"]);
@@ -980,7 +994,7 @@ export function codexVendorConfigChangeOnly(source: DiscoverySource, cache: stri
     if (text === null) return false;
     // Typed V2-V5 settings digests already exclude disable-only rows, so row
     // removal cannot change them; skipping it only narrows the search.
-    const rowsAffectDigest = !["codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5", "codex-settings-v7"].includes(source.hashMode ?? "");
+    const rowsAffectDigest = !["codex-settings-v2", "codex-settings-v3", "codex-settings-v4", "codex-settings-v5", "codex-settings-v7", "codex-settings-v8"].includes(source.hashMode ?? "");
     // A vendor refresh can coincide with the screen-reader receipt a typed
     // witness tolerates everywhere; prove the remainder under that same tolerance.
     const typed = source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" ? source.hashMode : undefined;
@@ -1000,6 +1014,7 @@ function replacementDigest(source: DiscoverySource, text: string): string | null
   if (source.hashMode === "codex-settings-v4") return hashCodexSettingsReplacementV4(text, budget);
   if (source.hashMode === "codex-settings-v5") return hashCodexSettingsReplacementV5(text, budget);
   if (source.hashMode === "codex-settings-v7") return hashCodexSettingsReplacementV7(text, budget);
+  if (source.hashMode === "codex-settings-v8") return hashCodexSettingsReplacementV8(text, budget);
   return null;
 }
 /** Whether replacing `path` with `text` leaves every recorded witness of it
@@ -1493,7 +1508,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (retained.agent !== agent || retained.method !== "reviewed") unresolved("invalid retained review");
     verifyAgentDiscovery(retained);
     if (!retained.sources.some(source => source.path === canonical(configPath) && source.format === undefined && source.fields === undefined)) unresolved("retained review is missing the full agent configuration source");
-    if (retained.sources.some(source => (source.hashMode === "sumi-settings-v1" || source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || source.hashMode === "claude-settings-v4" || source.hashMode === "claude-settings-v5" || (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7")))) && source.path !== canonical(configPath))) unresolved("retained settings witness names another configuration source");
+    if (retained.sources.some(source => SEMANTIC_SETTINGS_WITNESS_MODES.has(source.hashMode ?? "") && source.path !== canonical(configPath))) unresolved("retained settings witness names another configuration source");
     // A retained typed witness already binds this file more strongly than
     // the order-sensitive TOML projection, so it replaces that projection
     // instead of requiring it again.
@@ -1515,7 +1530,7 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     const supplied = { agent, roots: review.roots, sources: review.sources, ...(review.directories !== undefined ? { directories: review.directories } : {}), method: "reviewed" as const };
     if (review.sources.some(source => source.format !== undefined || source.fields !== undefined)) throw new Error("Explicit discovery reviews require full source-file hashes");
     verifyAgentDiscovery(supplied);
-    if (review.sources.some(source => (source.hashMode === "sumi-settings-v1" || source.hashMode === "claude-settings-v1" || source.hashMode === "claude-settings-v2" || (source.hashMode === "claude-settings-v3" || source.hashMode === "claude-settings-v4" || source.hashMode === "claude-settings-v5" || (source.hashMode === "codex-settings-v1" || source.hashMode === "codex-settings-v2" || (source.hashMode === "codex-settings-v3" || source.hashMode === "codex-settings-v4" || source.hashMode === "codex-settings-v5" || source.hashMode === "codex-settings-v6" || source.hashMode === "codex-settings-v7")))) && source.path !== canonical(configPath))) throw new Error("Semantic settings witnesses must name the configured agent configuration source");
+    if (review.sources.some(source => SEMANTIC_SETTINGS_WITNESS_MODES.has(source.hashMode ?? "") && source.path !== canonical(configPath))) throw new Error("Semantic settings witnesses must name the configured agent configuration source");
     if (!review.sources.some(source => source.path === canonical(configPath))) throw new Error("Discovery review must include the agent configuration source");
     // One witness per file: a reviewed typed witness replaces the
     // automatic projection of the same path rather than being shadowed by it.
@@ -1649,13 +1664,78 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (text === null) return null;
     try { return codexPluginHookHandlers(parseConfig(text, path)); } catch { return null; }
   };
-  function plugin(root: string, codex?: { marketplace: string; name: string; source: string }): void {
+  // An entry with `strict: false` is the manifest when the fetched plugin has
+  // none (the swift-lsp case): the entry may declare skills, hooks, commands,
+  // agents, MCP and LSP servers inline, so a physical file inventory alone
+  // cannot describe it. Both inputs that can change what loads are bound: the
+  // registry row that routes the plugin id to one catalog install location
+  // (claude-marketplace-registry-v2, lastUpdated normalized), and the entry
+  // (claude-marketplace-entry-v1, covering identity, source, strict and every
+  // injection field). A later redirect to a different catalog, or a refresh
+  // that changes the entry, changes a digest and refuses the older binding
+  // instead of sliding past it. Both modes are admitted in a live binding.
+  // An unreadable, duplicated or non-strict entry refuses here.
+  const bindCatalogEntry = (path: string, marketplace: string, plugin: string): void => {
+    if (sources.length >= AGENT_POLICY_LIMITS.discoverySources) throw new Error("Native discovery sources exceed their bound");
+    const witness = captureClaudeMarketplaceEntry(path, marketplace, plugin, budget);
+    sources.push({ path: witness.path, sha256: witness.sha256, hashMode: witness.hashMode, marketplace: witness.marketplace, plugin: witness.plugin });
+  };
+  const bindMarketplaceRegistry = (path: string): void => {
+    if (sources.some(source => source.path === path && source.hashMode === "claude-marketplace-registry-v2")) return;
+    if (sources.length >= AGENT_POLICY_LIMITS.discoverySources) throw new Error("Native discovery sources exceed their bound");
+    const witness = captureClaudeMarketplaceRegistryV2(path, budget);
+    sources.push({ path: witness.path, sha256: witness.sha256, hashMode: witness.hashMode });
+  };
+
+  const claudeMarketplaceManifest = (id: string | undefined): Record<string, unknown> => {
+    const split = id === undefined ? -1 : id.lastIndexOf("@");
+    const plugin = split > 0 ? id!.slice(0, split) : "", marketplace = split > 0 ? id!.slice(split + 1) : "";
+    if (!plugin || !marketplace) unresolved("plugin manifest missing without a marketplace entry");
+    const registryPath = join(nativeHome, "plugins/known_marketplaces.json");
+    const registryText = read(registryPath);
+    if (registryText === null) unresolved("plugin manifest missing: the marketplace registry is missing");
+    const registry = parseConfig(registryText!, registryPath);
+    const location = registry?.[marketplace]?.installLocation;
+    if (typeof location !== "string" || /[\x00-\x1f\x7f]/.test(location) || !isAbsolute(location) || resolve(location) !== location) unresolved("plugin manifest missing: the marketplace installation location is missing");
+    bindMarketplaceRegistry(registryPath);
+    const catalogPath = join(location as string, ".claude-plugin/marketplace.json");
+    const catalogText = read(catalogPath);
+    if (catalogText === null) unresolved("plugin manifest missing: the marketplace catalog is missing");
+    const catalog = parseConfig(catalogText!, catalogPath);
+    const entries = Array.isArray(catalog?.plugins) ? catalog.plugins.filter((entry: any) => entry && entry.name === plugin) : [];
+    if (entries.length !== 1) unresolved("plugin manifest missing: the marketplace entry is missing or ambiguous");
+    if (entries[0].strict !== false) unresolved("plugin manifest missing");
+    // Fields the entry witness binds as native loading controls, but which this
+    // reader does not model, are refused rather than dropped: settings,
+    // userConfig, types, channels, outputStyles, workflows, experimental,
+    // themes and monitors can change what Claude loads, and silently ignoring
+    // one would hide an unreviewed surface.
+    for (const key of ["settings", "userConfig", "types", "channels", "outputStyles", "workflows", "experimental", "themes", "monitors"]) {
+      if (entries[0][key] !== undefined) unresolved(`plugin marketplace entry declares an unsupported loading control: ${key}`);
+    }
+    // Bind the entry that decides loading only after it is known to exist and
+    // be unique, so the witness's own refusals never replace this contract.
+    bindCatalogEntry(catalogPath, marketplace, plugin);
+    const manifest: Record<string, unknown> = {};
+    for (const key of ["skills", "hooks", "commands", "agents", "mcpServers", "lspServers"]) {
+      if (entries[0][key] !== undefined) manifest[key] = entries[0][key];
+    }
+    return manifest;
+  };
+
+  function plugin(root: string, codex?: { marketplace: string; name: string; source: string }, id?: string): void {
     root = canonical(root); safe(root);
+    if (!lstatSync(root, { throwIfNoEntry: false })) unresolved("plugin installation root is missing");
     if (exclusion) roots.add(root);
     const manifestPath = join(root, agent === "claude" ? ".claude-plugin/plugin.json" : ".codex-plugin/plugin.json");
     const raw = witness(manifestPath, undefined, undefined, agent === "claude" ? "claude-plugin-manifest-v1" : undefined);
-    if (raw === null && !reviewedManifestAbsence(root, manifestPath)) unresolved("plugin manifest missing");
-    const manifest = raw === null ? {} : parseConfig(raw, manifestPath);
+    // Two accepted reasons for a missing manifest: the retained review still
+    // pins the path absent (main's reviewed-absence path), or a Claude
+    // marketplace entry declares the plugin with `strict: false` and supplies
+    // its controls (this PR's path). Non-Claude agents keep refusing.
+    const reviewPinsAbsence = raw === null && reviewedManifestAbsence(root, manifestPath);
+    if (raw === null && !reviewPinsAbsence && agent !== "claude") unresolved("plugin manifest missing");
+    const manifest = raw !== null ? parseConfig(raw, manifestPath) : reviewPinsAbsence ? {} : claudeMarketplaceManifest(id);
     if (exclusion && Object.keys(manifest).some(key => /skill|plugin|hook|marketplace|extension|instruction/i.test(key) && !["skills", "hooks"].includes(key))) unresolved("unknown plugin discovery controls");
     const hooks = witness(join(root, "hooks/hooks.json"));
     if (manifest.hooks !== undefined || hooks !== null) reviewRemedy(canonical(hooks !== null ? join(root, "hooks/hooks.json") : manifestPath), () => {
@@ -1715,10 +1795,60 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     for (const [id, enabled] of Object.entries(config.enabledPlugins ?? {})) {
       if (enabled === false) continue;
       if (enabled !== true) unresolved("unsupported plugin enablement");
-      const matches = installed?.[id];
-      if (!Array.isArray(matches) || matches.length !== 1 || typeof matches[0]?.installPath !== "string" || matches[0]?.scope !== "user") unresolved("enabled plugin registration is missing or ambiguous");
-      if (exclusion && (!isAbsolute(matches[0].installPath) || resolve(matches[0].installPath) !== matches[0].installPath || matches[0].installPath.length > AGENT_POLICY_LIMITS.pathCharacters)) unresolved("malformed plugin installation root");
-      plugin(matches[0].installPath);
+      const registrations = installed?.[id];
+      if (!Array.isArray(registrations) || registrations.length === 0) unresolved("enabled plugin registration is missing or ambiguous");
+      // Claude registers a plugin once per native scope: user and managed
+      // without a project, project and local with the project they belong to
+      // (measured with `claude plugin install --scope local` and the schema's
+      // "required for project/local scopes"). A plugin may hold several scopes
+      // and they can carry different versions and install paths, so every
+      // distinct valid root is excluded instead of refusing the native
+      // arrangement. Ambiguity stays for malformed rows, unknown scopes, a
+      // repeated scope and one root that claims two different versions.
+      const scopes = new Set<string>();
+      const rootsByPath = new Map<string, string>();
+      for (const registration of registrations) {
+        if (!registration || typeof registration !== "object" || Array.isArray(registration)) unresolved("enabled plugin registration is missing or ambiguous");
+        const row = registration as Record<string, unknown>;
+        const projectPath = row.projectPath;
+        // `projectPath` is an optional string in the native schema, required for
+        // project and local and permitted elsewhere. Where present it is
+        // validated as a path, but only project and local use it to tell two
+        // registrations apart; a user or managed row stays one effective scope
+        // whatever path it carries.
+        const projectRoot = (): string => {
+          if (typeof projectPath !== "string") unresolved("enabled plugin registration is missing or ambiguous");
+          const root = projectPath as string;
+          if (/[\x00-\x1f\x7f]/.test(root) || !isAbsolute(root) || resolve(root) !== root || root.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("enabled plugin registration is missing or ambiguous");
+          return root;
+        };
+        let scope: string;
+        if (row.scope === "user" || row.scope === "managed") {
+          if (projectPath !== undefined) projectRoot();
+          scope = row.scope;
+        } else if (row.scope === "project" || row.scope === "local") {
+          scope = `${row.scope}\0${projectRoot()}`;
+        } else {
+          // The continue is unreachable after unresolved(), but it keeps `scope`
+          // definitely assigned for the checks below.
+          unresolved("enabled plugin registration is missing or ambiguous"); continue;
+        }
+        if (scopes.has(scope)) unresolved("enabled plugin registration is missing or ambiguous");
+        scopes.add(scope);
+        const installPath = row.installPath;
+        if (typeof installPath !== "string") unresolved("malformed plugin installation root");
+        const pluginRoot = installPath as string;
+        if (/[\x00-\x1f\x7f]/.test(pluginRoot) || !isAbsolute(pluginRoot) || resolve(pluginRoot) !== pluginRoot || pluginRoot.length > AGENT_POLICY_LIMITS.pathCharacters) unresolved("malformed plugin installation root");
+        // The native schema types version as an optional string, so an absent
+        // version is legal and any other type is malformed native data. Two
+        // forms leave nothing for two different values to alias into.
+        const version = row.version === undefined ? "absent" : typeof row.version === "string" ? `string:${row.version}` : null;
+        if (version === null) return unresolved("malformed plugin registration version");
+        const prior = rootsByPath.get(pluginRoot);
+        if (prior !== undefined && prior !== version) unresolved("enabled plugin registration is missing or ambiguous");
+        rootsByPath.set(pluginRoot, version);
+      }
+      for (const root of rootsByPath.keys()) plugin(root, undefined, id);
     }
   } else if (agent === "codex") {
     for (const [id, value] of Object.entries(config.plugins ?? {}) as Array<[string, any]>) {

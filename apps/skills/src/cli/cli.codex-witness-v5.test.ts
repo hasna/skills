@@ -35,7 +35,7 @@ test("the real rebind CLI admits V5 and legacy targets to the exact policy preim
   // No policy is supplied: parsing must accept the target, then the owning
   // planner must refuse its missing preimage. Kernel-backed plan/apply tests
   // separately prove a complete upgrade with a genuine preserved original.
-  for (const version of [undefined, "2", "3", "4", "5"]) {
+  for (const version of [undefined, "2", "3", "4", "5", "7", "8"]) {
     const result = await f.rebind(version);
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
@@ -48,12 +48,12 @@ test("the real rebind CLI admits V5 and legacy targets to the exact policy preim
 
 test("the real rebind CLI refuses unsupported and malformed targets and foreign agents", async () => {
   const f = await fixture();
-  // 7 is the narrowed discovery projection; 6 carries hook sources and is never a rebind target.
-  for (const version of ["1", "6", "8", "05", "5.0", "5x", "7.0", ""]) {
+  // 7 and 8 are the narrowed discovery projections; 6 carries hook sources and is never a rebind target.
+  for (const version of ["1", "6", "05", "5.0", "5x", "7.0", "8.0", ""]) {
     const result = await f.rebind(version);
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Codex witness version accepts 2, 3, 4, 5 or 7");
+    expect(result.stderr.trim()).toBe("Codex witness version accepts 2, 3, 4, 5, 7 or 8");
   }
   const foreign = await f.rebind("5", "claude");
   expect(foreign.exitCode).toBe(1);
@@ -82,5 +82,14 @@ test("the real witness CLI exposes V5 without changing V3 capture semantics", as
   expect(await capture("codex-settings-v5")).not.toBe(oldV5);
   writeFileSync(f.original, 'tui.status_line=["future-status-item"]\n[tui.native_discovery]\ncommand="/bin/unreviewed"\n');
   expect(await capture("codex-settings-v5")).not.toBe(oldV5);
+  // V8 frees only a marketplace's own timestamp; V7 keeps binding it, and a
+  // marketplace redirect still changes V8.
+  writeFileSync(f.original, '[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/opt/bridge"\nlast_updated = "2026-11-02T10:00:00Z"\n');
+  const v8 = await capture("codex-settings-v8"), v7 = await capture("codex-settings-v7");
+  writeFileSync(f.original, '[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/opt/bridge"\nlast_updated = "2026-11-03T23:59:59Z"\n');
+  expect(await capture("codex-settings-v8")).toBe(v8);
+  expect(await capture("codex-settings-v7")).not.toBe(v7);
+  writeFileSync(f.original, '[marketplaces.hasna-internal-bridge]\nsource_type = "local"\nsource = "/tmp/other"\nlast_updated = "2026-11-03T23:59:59Z"\n');
+  expect(await capture("codex-settings-v8")).not.toBe(v8);
   expect(readdirSync(f.data)).toEqual([]);
 });
