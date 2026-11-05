@@ -663,7 +663,7 @@ Install a runtime that recognizes `claude-settings-v4`, including any bundled
 copy of the verifier, before a policy carries it; an older runtime refuses the
 unknown hash mode.
 
-### Narrowed discovery reviews: `claude-settings-v5` and `codex-settings-v7`
+### Narrowed discovery reviews: `claude-settings-v5`, `codex-settings-v7` and `codex-settings-v8`
 
 Earlier modes bind almost the whole settings file, so ordinary use tripped
 discovery drift: switching to any model not on a fixed list (for example
@@ -703,6 +703,18 @@ skills, hooks or plugins:
   `[projects.*]` trust, `[tui]`, `[notice]`, `notify` and sandbox or approval
   settings vary freely. Because every MCP server is bound, V7 needs no hook
   dependency metadata; V6 keeps its own contract and is never narrowed.
+- `codex-settings-v8`: the same projection as `codex-settings-v7` with exactly
+  one scalar free — a marketplace entry's own `last_updated`, when it is a
+  string or number, at the root and in every profile. Codex rewrites that
+  timestamp on its own schedule, and a timestamp cannot add, remove or redirect
+  a skill, hook or plugin. Every other marketplace field, the entry name, a
+  non-scalar value and the table itself stay bound, so an added, removed,
+  renamed or redirected marketplace still reports drift. V7 keeps its shipped
+  meaning, so a receipt captured under V7 verifies exactly as before, with one
+  correction: a configuration containing a profile literally named `__proto__`
+  was dropped by the shipped projection and is now bound, so such a receipt
+  reports drift once and needs a fresh review. V8 is a new mode for a newly
+  reviewed or install-bound policy.
 
 Deliberately unbound, and therefore not drift: `statusLine` and Codex `notify`
 (the owner's request names both as ordinary use, although each runs a
@@ -710,12 +722,13 @@ command), and model routing (`env` such as `ANTHROPIC_BASE_URL`, Codex
 `model_provider` and `[model_providers.*]`). Adding any MCP server to a V7
 review is drift: it is reported, not blocking.
 
-Opt in through a fresh review (`skills hook witness --kind claude-settings-v5`
-or `--kind codex-settings-v7`) or a preserved-preimage upgrade
-(`skills hook rebind-settings --claude-witness-version 5` or
-`--codex-witness-version 7`). The upgrade accepts a raw or any earlier typed
-witness except Codex V6, proves the preimage in its original mode, and refuses
-when any narrowed field differs.
+Opt in through a fresh review (`skills hook witness --kind claude-settings-v5`,
+`--kind codex-settings-v7` or `--kind codex-settings-v8`) or a
+preserved-preimage upgrade (`skills hook rebind-settings
+--claude-witness-version 5`, `--codex-witness-version 7` or
+`--codex-witness-version 8`). The upgrade accepts a raw or any earlier typed
+witness except Codex V6 (V8 also accepts a preserved V7 witness), proves the
+preimage in its original mode, and refuses when any narrowed field differs.
 
 Existing Claude and Codex reviews keep verifying after an upgrade without a new
 review. A legacy full-file settings witness (raw bytes,
@@ -725,6 +738,14 @@ local stdio MCP servers, which V7 binds. So while it still matches, the narrowed
 digest of the current file is the narrowed digest of a state that review
 accepts. The live hook records that observation, computed from the same bytes
 that matched, in `native-witness-narrowed.json` beside `agent-policy.json`.
+New observations for a Codex legacy witness record `codex-settings-v8`, which
+also frees a marketplace's own `last_updated`; an entry recorded earlier under
+`codex-settings-v7` stays usable and is judged by its own recorded mode, so the
+mode moving forward does not strand a station that had already drifted. When a
+V7 entry already saw the same witness, V8 is recorded only while the file still
+matches that V7 observation: a local stdio MCP server that `codex-settings-v3`–`v5`
+omit and that was redirected in between is reported rather than adopted along
+with the wider projection.
 When the legacy witness later stops matching, the change is accepted only if the
 current narrowed digest equals the recorded one; the first observation is never
 replaced, so a local MCP server added after it is reported once the legacy
