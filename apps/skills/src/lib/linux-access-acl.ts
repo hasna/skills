@@ -13,9 +13,10 @@ import type { Pointer } from "bun:ffi";
  *
  * errno is thread-local and any later libc call on this thread, or a signal
  * handler that does not preserve it, can overwrite it. The probe therefore:
- * - resets errno immediately before each query,
+ * - resets errno before each query where the layer can write it,
  * - reads it as the very next step after the call, with nothing allocated in
- *   between (the call returns an immediate number, not a BigInt),
+ *   between (the call returns an immediate number, not a BigInt, and errno is
+ *   read with bun:ffi's read.i32, which allocates nothing),
  * - re-queries a bounded number of times when the result is -1 with an errno
  *   other than the two "absent" answers, since a stray overwrite does not
  *   repeat while a genuine failure does. A persistent failure refuses.
@@ -49,7 +50,7 @@ export interface LinuxAclProbe {
   /** process.arch of the running binary; only asm-generic errno tables are admitted. */
   readonly arch: string;
   /** Thread-local errno of the calling thread, or null when it cannot be located. */
-  readonly errno: { get(): number; set(value: number): void } | null;
+  readonly errno: { get(): number; set?(value: number): void } | null;
   /** fgetxattr(fd, name, NULL, 0): the attribute size, or -1. */
   fgetxattr(fd: number, attribute: string): number | bigint;
   /** fstatfs(fd).f_type, or null when fstatfs fails. */
@@ -60,11 +61,11 @@ type AttributeState = "absent" | "unsupported" | "unverified";
 
 function queryAttribute(probe: LinuxAclProbe, errno: NonNullable<LinuxAclProbe["errno"]>, fd: number, attribute: string): AttributeState | "present" {
   for (let attempt = 0; attempt < LINUX_ACL_QUERY_ATTEMPTS; attempt++) {
-    errno.set(0);
+    errno.set?.(0);
     const result = probe.fgetxattr(fd, attribute);
     // Capture errno before anything else can run on this thread.
     const code = errno.get();
-    if (result !== -1) return "present";
+    if (result !== -1 && result !== -1n) return "present";
     if (code === LINUX_ENODATA) return "absent";
     if (code === LINUX_EOPNOTSUPP) return "unsupported";
     // Any other errno, including 0, may be an overwrite or a real failure:
@@ -92,7 +93,7 @@ export function linuxAccessAclAbsent(probe: LinuxAclProbe, fd: number, creationP
 /** Run with the glibc probe; any loading or ABI failure refuses (false). */
 export function withGlibcAclProbe(use: (probe: LinuxAclProbe) => boolean): boolean {
   try {
-    const { dlopen, ptr, toArrayBuffer, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
+    const { dlopen, ptr, read, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
     const library = dlopen("libc.so.6", {
       // i64_fast returns small values as immediate numbers: no allocation
       // (and so no collector activity) between the call and the errno read.
@@ -101,12 +102,15 @@ export function withGlibcAclProbe(use: (probe: LinuxAclProbe) => boolean): boole
       __errno_location: { args: [], returns: "ptr" },
     });
     try {
-      const location = library.symbols.__errno_location();
-      const cell = location ? new Int32Array(toArrayBuffer(location as Pointer, 0, 4)) : null;
+      const location = library.symbols.__errno_location() as Pointer | null;
       const names = new Map<string, Buffer>();
+      // Read-only access to errno: glibc sets it on every -1 result, so a
+      // reset is not needed for correctness, and an unexplained value is
+      // re-queried. Mapping the thread-local cell as writable memory would
+      // bypass bun:ffi's read seam.
       return use({
         arch: process.arch,
-        errno: cell ? { get: () => cell[0]!, set: value => { cell[0] = value; } } : null,
+        errno: location ? { get: () => read.i32(location) } : null,
         fgetxattr: (fd, attribute) => {
           let name = names.get(attribute);
           if (!name) names.set(attribute, name = Buffer.from(attribute + "\0"));

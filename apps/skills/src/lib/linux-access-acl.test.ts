@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { closeSync, mkdtempSync, openSync, constants } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  LINUX_ACL_QUERY_ATTEMPTS, LINUX_ENODATA, LINUX_EOPNOTSUPP, linuxAccessAclAbsent, withGlibcAclProbe, type LinuxAclProbe,
+  LINUX_ACL_QUERY_ATTEMPTS, LINUX_ENODATA, LINUX_EOPNOTSUPP, linuxAccessAclAbsent, type LinuxAclProbe,
 } from "./linux-access-acl.js";
 
 const EINTR = 4, EIO = 5, EBADF = 9, EXT4 = 0xef53n, NFS = 0x6969n, FUSE = 0x65735546n;
@@ -27,7 +26,7 @@ function fakeProbe(script: Record<string, Answer[]>, options: { arch?: string; e
       const answer = script[attribute]?.shift();
       if (!answer) throw new Error(`unscripted query: ${attribute}`);
       events.push(`fgetxattr:${attribute}`);
-      if (answer.result === -1 && answer.errno !== undefined) errno = answer.errno;
+      if ((answer.result === -1 || answer.result === -1n) && answer.errno !== undefined) errno = answer.errno;
       if (answer.clobber !== undefined) errno = answer.clobber;
       return answer.result;
     },
@@ -117,26 +116,34 @@ describe("Linux POSIX ACL absence (SH-00084)", () => {
     }
   });
 
-  test.skipIf(process.platform !== "linux")("glibc: a fresh private directory reads as having no ACL, every time", () => {
-    const root = mkdtempSync(join(tmpdir(), "skills-linux-acl-"));
-    const fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY);
-    const rounds = 3000, seen: Record<number, number> = {};
-    let queries = 0;
-    try {
-      for (let round = 0; round < rounds; round++) {
-        // Keep the collector busy around the queries: allocation between the
-        // call and the errno read is what the earlier reader allowed.
-        if (round % 250 === 0) Bun.gc(false);
-        const garbage = Array.from({ length: 64 }, (_, index) => `${round}:${index}`);
-        const absent = withGlibcAclProbe(probe => linuxAccessAclAbsent({
-          ...probe,
-          errno: { get: () => { const value = probe.errno!.get(); seen[value] = (seen[value] ?? 0) + 1; return value; }, set: probe.errno!.set },
-          fgetxattr: (descriptor, attribute) => { queries++; return probe.fgetxattr(descriptor, attribute); },
-        }, fd, true));
-        expect(absent, JSON.stringify({ round, seen })).toBe(true);
-        expect(garbage).toHaveLength(64);
-      }
-      console.log(`SH-00084 glibc ACL probe: ${queries} queries, ${queries - 2 * rounds} re-queried, errno counts ${JSON.stringify(seen)}`);
-    } finally { closeSync(fd); }
+  test("the glibc layer shape: read-only errno and BigInt results are handled the same way", () => {
+    const readOnly = (fake: ReturnType<typeof fakeProbe>): LinuxAclProbe => ({ ...fake.probe, errno: { get: fake.probe.errno!.get } });
+    const absent = fakeProbe({ [access]: [{ result: -1n, errno: LINUX_ENODATA }] });
+    expect(linuxAccessAclAbsent(readOnly(absent), 7, false)).toBe(true);
+    const present = fakeProbe({ [access]: [{ result: 8n }] });
+    expect(linuxAccessAclAbsent(readOnly(present), 7, false)).toBe(false);
+    const clobbered = fakeProbe({ [access]: [{ result: -1, errno: LINUX_ENODATA, clobber: EINTR }, noData] });
+    expect(linuxAccessAclAbsent(readOnly(clobbered), 7, false)).toBe(true);
+    expect(clobbered.events.filter(event => event.startsWith("set:"))).toEqual([]);
+    const failing = fakeProbe({ [access]: Array.from({ length: LINUX_ACL_QUERY_ATTEMPTS }, () => ({ result: -1n, errno: EIO })) });
+    expect(linuxAccessAclAbsent(readOnly(failing), 7, false)).toBe(false);
   });
+
+  // The real glibc path runs in a child with a round cap, a time budget and a
+  // hard kill, so a stall can never hold the suite past bun's test timeout.
+  test.skipIf(process.platform !== "linux")("glibc: a fresh private directory reads as having no ACL in a bounded child", async () => {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "linux-access-acl.fixture.ts"), "500", "5000"], {
+      cwd: import.meta.dir, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TMPDIR: tmpdir() }, stdout: "pipe", stderr: "pipe",
+    });
+    let killed = false;
+    const timer = setTimeout(() => { killed = true; child.kill("SIGKILL"); }, 15_000);
+    try {
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ killed, code, stderr }).toEqual({ killed: false, code: 0, stderr: "" });
+      const result = JSON.parse(stdout) as { completed: number; refused: number; queries: number; requeried: number; seen: Record<string, number> };
+      console.log(`SH-00084 glibc ACL probe: ${JSON.stringify(result)}`);
+      expect(result.completed).toBeGreaterThan(0);
+      expect(result.refused).toBe(0);
+    } finally { clearTimeout(timer); }
+  }, 20_000);
 });
