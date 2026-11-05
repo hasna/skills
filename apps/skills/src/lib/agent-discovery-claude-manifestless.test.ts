@@ -91,7 +91,7 @@ test("a strict entry without a manifest refuses", () => {
 
 test("a missing marketplace entry refuses", () => {
   const { home } = setup(null);
-  expect(() => roots(home)).toThrow("plugin marketplace entry is missing or ambiguous");
+  expect(() => roots(home)).toThrow("plugin manifest missing: the marketplace entry is missing or ambiguous");
 });
 
 test("a duplicated marketplace entry refuses", () => {
@@ -107,13 +107,13 @@ test("a duplicated marketplace entry refuses", () => {
   put(join(home, ".claude/plugins/known_marketplaces.json"), JSON.stringify({ "fixture-market": { installLocation: marketplace } }));
   put(join(home, ".claude/settings.json"), JSON.stringify({ enabledPlugins: { "fixture-plugin@fixture-market": true } }));
   put(join(home, ".claude/plugins/installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "fixture-plugin@fixture-market": [{ scope: "user", installPath: root, version: "1.0.0" }] } }));
-  expect(() => roots(home)).toThrow("plugin marketplace entry is missing or ambiguous");
+  expect(() => roots(home)).toThrow("plugin manifest missing: the marketplace entry is missing or ambiguous");
 });
 
 test("a missing marketplace registry refuses", () => {
   const { home } = setup({ strict: false });
   rmSync(join(home, ".claude/plugins/known_marketplaces.json"));
-  expect(() => roots(home)).toThrow("plugin marketplace registry is missing");
+  expect(() => roots(home)).toThrow("plugin manifest missing: the marketplace registry is missing");
 });
 
 test("an absent installation root refuses", () => {

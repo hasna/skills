@@ -1693,17 +1693,17 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
     if (!plugin || !marketplace) unresolved("plugin manifest missing without a marketplace entry");
     const registryPath = join(nativeHome, "plugins/known_marketplaces.json");
     const registryText = read(registryPath);
-    if (registryText === null) unresolved("plugin marketplace registry is missing");
+    if (registryText === null) unresolved("plugin manifest missing: the marketplace registry is missing");
     const registry = parseConfig(registryText!, registryPath);
     const location = registry?.[marketplace]?.installLocation;
-    if (typeof location !== "string" || /[\x00-\x1f\x7f]/.test(location) || !isAbsolute(location) || resolve(location) !== location) unresolved("plugin marketplace installation location is missing");
+    if (typeof location !== "string" || /[\x00-\x1f\x7f]/.test(location) || !isAbsolute(location) || resolve(location) !== location) unresolved("plugin manifest missing: the marketplace installation location is missing");
     bindMarketplaceRegistry(registryPath);
     const catalogPath = join(location as string, ".claude-plugin/marketplace.json");
     const catalogText = read(catalogPath);
-    if (catalogText === null) unresolved("plugin marketplace catalog is missing");
+    if (catalogText === null) unresolved("plugin manifest missing: the marketplace catalog is missing");
     const catalog = parseConfig(catalogText!, catalogPath);
     const entries = Array.isArray(catalog?.plugins) ? catalog.plugins.filter((entry: any) => entry && entry.name === plugin) : [];
-    if (entries.length !== 1) unresolved("plugin marketplace entry is missing or ambiguous");
+    if (entries.length !== 1) unresolved("plugin manifest missing: the marketplace entry is missing or ambiguous");
     if (entries[0].strict !== false) unresolved("plugin manifest missing");
     // Fields the entry witness binds as native loading controls, but which this
     // reader does not model, are refused rather than dropped: settings,
