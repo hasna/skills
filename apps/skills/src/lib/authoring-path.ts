@@ -3,7 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { INTEGRATION_AGENTS } from "./agent-adapters.js";
-import { agentDiscoveryConfigPath, discoveryExecutable, recordedDiscoveryExecutable, resolveAgentDiscoveryExclusionRoots, nativeDiscoveryAliasTargets, type AgentDiscoveryBinding } from "./agent-discovery.js";
+import { agentDiscoveryConfigPath, discoveryExecutable, recordedDiscoveryExecutable, resolveAgentDiscoveryExclusionRoots, nativeDiscoveryAliasTargets, NativeDiscoveryUnresolved, type AgentDiscoveryBinding } from "./agent-discovery.js";
 import { getDataDirReadOnly } from "./config.js";
 import { readManagedSkillPolicySnapshot } from "./managed-policy.js";
 import { openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
@@ -52,6 +52,17 @@ function physicalPath(path: string): string {
 export interface PortableAuthoringPathOptions {
   /** The account whose native discovery must remain free of authored payloads. */
   homeDir?: string;
+}
+
+/** The authoring form of a native discovery refusal. Authoring commands take
+ * no --discovery-inputs option, so name the command that does, or say that a
+ * review does not resolve it. Names and paths only, never file content. */
+export function portableAuthoringDiscoveryRefusal(error: NativeDiscoveryUnresolved, destination: string): string {
+  const head = `Native discovery is unresolved (${error.agent}: ${error.detail}).${error.source ? ` Checked source: ${error.source}.` : ""}`;
+  const review = `skills hook install --agent ${error.agent} --discovery-inputs <reviewed-file> --apply`;
+  return error.reviewable
+    ? `${head} Portable Skills authoring stays refused: an unreviewed ${error.agent} hook or plugin option could load skills written to ${destination}. This command takes no --discovery-inputs option; review the current ${error.agent} configuration with ${review}, then retry.`
+    : `${head} Portable Skills authoring stays refused: Skills cannot list every skill root this ${error.agent} configuration registers, so it cannot rule out ${destination}. This command takes no --discovery-inputs option; correct that ${error.agent} configuration entry, then retry. Where a reviewed discovery binding covers it, record one with ${review}.`;
 }
 
 function contains(root: string, path: string): boolean {
@@ -185,13 +196,20 @@ export function assertPortableAuthoringPath(path: string, options: PortableAutho
   if (native) {
     throw new Error(`Refusing portable Skills authoring below native discovery root '${native}': ${lexical}. Set HASNA_SKILLS_DIR to a private authoring corpus outside native roots.`);
   }
-  const roots = configuredRoots(home, options.homeDir !== undefined);
-  for (const value of selected) {
-    // The account's existing binding continues to protect its recorded roots.
-    // An override is another consumer, never a reason to rewrite that binding
-    // or reuse its opaque executable review for a different configuration.
-    if (physicalPath(value.path) === physicalPath(join(home, `.${value.agent}`))) continue;
-    roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: value.agent, nativeHome: value.path, canonical: physicalPath, executable: null }));
+  const roots: string[] = [];
+  try {
+    roots.push(...configuredRoots(home, options.homeDir !== undefined));
+    for (const value of selected) {
+      // The account's existing binding continues to protect its recorded roots.
+      // An override is another consumer, never a reason to rewrite that binding
+      // or reuse its opaque executable review for a different configuration.
+      if (physicalPath(value.path) === physicalPath(join(home, `.${value.agent}`))) continue;
+      roots.push(...resolveAgentDiscoveryExclusionRoots({ home, agent: value.agent, nativeHome: value.path, canonical: physicalPath, executable: null }));
+    }
+  } catch (error) {
+    // The refusal stands; only its remedy changes for authoring commands.
+    if (error instanceof NativeDiscoveryUnresolved) throw new Error(portableAuthoringDiscoveryRefusal(error, lexical));
+    throw error;
   }
   for (const root of roots) {
     if (candidates.some(candidate => [resolve(root), physicalPath(root)].some(nativeRoot => contains(nativeRoot, candidate) || contains(candidate, nativeRoot)))) {

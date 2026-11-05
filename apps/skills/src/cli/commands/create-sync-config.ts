@@ -9,6 +9,7 @@ import type { Command } from "commander";
 import { loadConfig, saveConfig, unsetConfig, getConfigPath } from "../../lib/config.js";
 import { readStoredApiUrl, saveApiUrl } from "../../lib/auth-store.js";
 import { scaffoldPortableSkill } from "../../lib/portable-skills.js";
+import { AUTHORING_NATIVE_HOOKS_HELP } from "./portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
 import { handleProfileSync } from "./profile-sync.js";
 import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
@@ -142,6 +143,7 @@ export function registerCreateSync(parent: Command) {
     .option("--global", "Deprecated; custom skills are always global", false)
     .option("--json", "Output result as JSON", false)
     .description("Scaffold a new custom skill directory")
+    .addHelpText("after", AUTHORING_NATIVE_HOOKS_HELP)
     .action((name: string, options: any) => handleCreate(name, options));
 
   // Sync — the last mile: corpus -> each agent's global skills folder.
