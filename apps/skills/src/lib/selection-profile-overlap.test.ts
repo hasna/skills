@@ -74,6 +74,28 @@ test("a sync that read profile A refuses after a competing sync commits B, and B
   expect(readdirSync(join(f.cacheDir, "profiles")).sort()).toEqual([f.profileFile.split("/").pop()!]);
 });
 
+test("two overlapping syncs of the same revision both succeed, and the later one leaves the committed profile in place", async () => {
+  const f = fixture();
+  await syncSelectionProfile("fleet", { cacheDir: f.cacheDir, client: f.client(f.profile("revision-A", ["alpha"])) });
+  let entered!: () => void, release!: () => void;
+  const downloading = new Promise<void>(resolve => { entered = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let gated = false;
+  // X and Y resolve the same revision-B. X reads A, then waits inside its download while Y commits B.
+  const x = syncSelectionProfile("fleet", { cacheDir: f.cacheDir, client: f.client(f.profile("revision-B", ["alpha", "beta"]), async () => { if (!gated) { gated = true; entered(); await barrier; } }) });
+  const outcome = x.then(result => ({ result, code: null as string | null }), (error: { code?: string }) => ({ result: null, code: error.code ?? "UNNAMED" }));
+  await downloading;
+  const y = await syncSelectionProfile("fleet", { cacheDir: f.cacheDir, client: f.client(f.profile("revision-B", ["alpha", "beta"])) });
+  const committed = readFileSync(f.profileFile);
+  expect(y.receipt?.profile.profileRevision).toBe("revision-B");
+  release();
+  const settled = await outcome;
+  expect(settled.code).toBeNull();
+  expect(settled.result?.receipt?.profile.profileRevision).toBe("revision-B");
+  expect(readFileSync(f.profileFile)).toEqual(committed);
+  expect(readdirSync(join(f.cacheDir, "profiles")).sort()).toEqual([f.profileFile.split("/").pop()!]);
+});
+
 const childWriter = String.raw`
 import { copyFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -157,10 +179,11 @@ test("skills sync --expect-profile-sha256 reaches activation, with 'absent' mean
     expect(process.exitCode).toBe(1);
     expect(output.map(line => JSON.parse(line).error?.code)).toContain("SELECTION_PROFILE_CHANGED");
     expect(readFileSync(f.profileFile)).toEqual(bytesA);
-    process.exitCode = exitCode;
+    // Bun keeps a non-zero exit code assigned undefined; restore an explicit value.
+    process.exitCode = exitCode ?? 0;
     await handleProfileSync({ ...command, expectProfileSha256: sha256(bytesA) }, { cacheDir: f.cacheDir, client: f.client(f.profile("revision-B", ["alpha"])) });
     expect(f.revision()).toBe("revision-B");
-  } finally { console.log = log; process.exitCode = exitCode; }
+  } finally { console.log = log; process.exitCode = exitCode ?? 0; }
 });
 
 test("a single writer behaves as before: same result, same bytes, no lock or temporary file left", async () => {

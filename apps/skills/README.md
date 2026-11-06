@@ -1698,7 +1698,10 @@ Activation replaces the cached profile only while it is still the exact file
 the sync read: same bytes (SHA-256) and same inode, compared under the profile's
 write lock (`<profile>.json.write-lock` beside it), which every activation
 takes (sync, install, pull and reconcile). If another writer replaced the profile in the meantime, the
-sync refuses with `SELECTION_PROFILE_CHANGED` and writes no profile; verified
+sync refuses with `SELECTION_PROFILE_CHANGED` and writes no profile, unless
+that writer committed the same selection (identity, revision and every
+selection, not `verifiedAt`): then the sync succeeds, keeping a fresh receipt as
+it is and re-stamping an expired one. Verified
 bundle objects it already added stay, since they are immutable. To bind a
 profile you preserved beforehand, pass its digest:
 `skills sync --selection-profile default --expect-profile-sha256 <sha256>`
@@ -1708,6 +1711,13 @@ refuses with `PROFILE_WRITE_BUSY` and leaves the lock in place. Readers never
 take the lock. A dead writer's lock is recovered only as for session locks
 below: after 30 seconds, when its host, boot and process identity prove it is
 gone, it is moved, never deleted, to `selection-cache/profile-lock-recoveries`.
+`skills profile-lock <profile-id> --json` shows a lock read-only: its path,
+PID, host, age and whether this host can prove the holder gone. Any other lock
+is safe to move aside only once the process it names has exited on that host.
+At SessionStart, a refresh refused with `SELECTION_PROFILE_CHANGED`,
+`PROFILE_WRITE_BUSY` or `PROFILE_WRITE_LOCKED` wrote nothing, so the session
+continues from the last verified profile with a notice, like a refresh that
+timed out.
 
 ### Reading provenance instead of trusting one record
 
@@ -2174,6 +2184,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
 | `skills review-export <slug@version> --output <path>` | | Export one immutable hosted bundle to a private archive for review without selecting it |
 | `skills sync --selection-profile <id> [--check] [--station <id>]` | | Sync or check the selected profile/cache; optionally record station state |
+| `skills profile-lock <profile-id> [--json]` | | Inspect the cached profile write lock read-only: path, PID, host, age and whether this host proves its holder gone |
 | `skills station-state <id>` | | Read a station's sync receipt in the authenticated workspace |
 | `skills run <name> [args]` | | Execute a skill directly |
 | `skills run --target cloud --selection-profile <id> <name@version>` | | Submit an explicitly selected cloud execution |

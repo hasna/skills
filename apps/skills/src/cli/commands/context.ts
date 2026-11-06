@@ -4,7 +4,7 @@ import { readSync } from "node:fs";
 import { configuredSkillsApiUrl, normalizeSkillsApiOrigin, skillsApiRequestUrl } from "../../lib/fleet-credentials.js";
 import { buildSkillContext, type SkillContextInput } from "../../lib/skill-context.js";
 import { loadSelectedSkill, type ResolvedSelectionContext, type SelectionResolverOptions } from "../../lib/selection-resolver.js";
-import { inspectSessionWriteLock, readSkillSessionSnapshotIfExists, recoverSessionWriteLock, SkillSelectionError, type SkillSessionReceipt } from "../../lib/selection-cache.js";
+import { inspectProfileWriteLock, inspectSessionWriteLock, readSkillSessionSnapshotIfExists, recoverSessionWriteLock, SkillSelectionError, type SkillSessionReceipt } from "../../lib/selection-cache.js";
 import { readManagedSkillPolicy } from "../../lib/managed-policy.js";
 import { inspectSkillSession, reconcileSkillSession, renewSkillSessionPin, SessionPinMigrationTimeout, type SessionPinMigration, type SessionReconciliationInput, type SessionSelectionMetadata } from "../../lib/session-reconciliation.js";
 import { awaitBackgroundRenewal, BACKGROUND_RENEWAL_WAIT_MS, backgroundRenewalError, readBackgroundRenewalState, renewalModeFor, runBackgroundRenewal, SessionRenewalInBackground, startBackgroundRenewal } from "../../lib/session-background-renewal.js";
@@ -104,6 +104,16 @@ export function registerContextCommands(parent: Command): void {
             ...result.plan.addedSelections.map(selection => `Added selection (unloaded): ${sessionSelectionLabel(selection)}`),
             `Review --json output, then use --apply --plan-digest ${result.planDigest} --plan-issued-at ${result.plan.issuedAt} --plan-expires-at ${result.plan.expiresAt}.`,
           ].join("\n"));
+      } catch (error) { reportContextError(error, options.json); }
+    });
+  parent.command("profile-lock <profile-id>")
+    .option("--json", "Return the lock metadata as JSON", false)
+    .description("Inspect the cached selection profile's write lock read-only; it is never moved or changed")
+    .action(async (id: string, options: { json?: boolean }) => {
+      try {
+        const result = inspectProfileWriteLock(id);
+        await writeCliOutput(options.json ? JSON.stringify(result) : !result.locked ? `No write lock on profile ${JSON.stringify(id)} (${result.path}).`
+          : `Lock ${result.path}: PID ${result.pid} on ${result.host ?? "an unrecorded host"}, schema ${result.schemaVersion}, modified ${result.lockMtime}; holder ${result.holder}${result.holderStartMatches === false ? " (PID reused)" : ""}. ${result.recoverableAutomatically ? "The next sync moves it aside automatically." : "Move it aside only once that process is known to have exited."}`);
       } catch (error) { reportContextError(error, options.json); }
     });
   parent.command("load <skill>")

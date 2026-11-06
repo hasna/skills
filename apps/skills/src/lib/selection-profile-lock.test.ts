@@ -12,7 +12,7 @@ import { copyFileSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, ren
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  activateSelectionProfile, PROFILE_WRITE_LOCK_WAIT_MS, readSelectionProfile, readSelectionProfileSnapshot, selectionProfilePrecondition,
+  activateSelectionProfile, inspectProfileWriteLock, PROFILE_WRITE_LOCK_WAIT_MS, readSelectionProfile, readSelectionProfileSnapshot, selectionProfilePrecondition,
   type SelectionProfilePrecondition,
 } from "./selection-cache.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
@@ -85,6 +85,28 @@ test("the precondition binds the file, not only its bytes: identical bytes at a 
   expect(readFileSync(f.file)).toEqual(f.bytesA);
 });
 
+test("a profile already holding the same selection is kept when fresh and re-stamped when expired; neither is a refusal", () => {
+  const f = fixture();
+  // Another writer committed the same selection after this writer read A.
+  const same = (verifiedAt: string) => {
+    const copy = join(f.root, "same.json");
+    writeFileSync(copy, `${JSON.stringify({ schemaVersion: 1, verifiedAt, profile: profile("revision-A") })}\n`, { mode: 0o600 });
+    renameSync(copy, f.file);
+    return readFileSync(f.file);
+  };
+  const fresh = same(new Date(Date.now() - 1_000).toISOString());
+  const kept = activateSelectionProfile(profile("revision-A"), f.snapshotA, f.options);
+  expect(readFileSync(f.file)).toEqual(fresh);
+  expect(kept).toEqual(JSON.parse(fresh.toString("utf8")));
+  const stale = selectionProfilePrecondition(readSelectionProfileSnapshot("fleet", f.options))!;
+  same("2026-01-01T00:00:00.000Z");
+  const restamped = activateSelectionProfile(profile("revision-A"), stale, f.options);
+  expect(Date.parse(restamped.verifiedAt)).toBeGreaterThan(Date.now() - 60_000);
+  expect(readSelectionProfile("fleet", f.options)).toEqual(restamped);
+  // A different selection is still a stale overwrite.
+  expect(() => activateSelectionProfile(profile("revision-C"), stale, f.options)).toThrow(expect.objectContaining({ code: "SELECTION_PROFILE_CHANGED" }));
+});
+
 test("an activation that names no precondition, or a malformed one, is refused and writes nothing", () => {
   const f = fixture();
   for (const expected of [undefined, {}, { sha256: "x", dev: 1, ino: 1 }, { sha256: f.snapshotA.sha256, dev: "1", ino: 1 }]) {
@@ -101,8 +123,10 @@ test("a live holder past the bounded wait refuses PROFILE_WRITE_BUSY; the lock a
   expect(readSelectionProfile("fleet", f.options)?.profile.profileRevision).toBe("revision-A");
   expect(performance.now() - read).toBeLessThan(250);
   const started = performance.now();
-  expect(() => activateSelectionProfile(profile("revision-B"), f.snapshotA, f.options)).toThrow(expect.objectContaining({ code: "PROFILE_WRITE_BUSY" }));
+  expect(() => activateSelectionProfile(profile("revision-B"), f.snapshotA, f.options)).toThrow(expect.objectContaining({ code: "PROFILE_WRITE_BUSY", message: expect.stringContaining(f.lockPath) }));
   expect(performance.now() - started).toBeGreaterThanOrEqual(PROFILE_WRITE_LOCK_WAIT_MS - 50);
+  expect(inspectProfileWriteLock("fleet", f.options)).toMatchObject({ profileId: "fleet", path: f.lockPath, locked: true, schemaVersion: 1, pid: process.pid, holder: "alive", hostBound: false, recoverableAutomatically: false });
+  expect(readFileSync(f.lockPath, "utf8")).toBe(lock);
   expect(readFileSync(f.lockPath, "utf8")).toBe(lock);
   expect(readFileSync(f.file)).toEqual(f.bytesA);
 });
@@ -134,7 +158,7 @@ test("the comparison runs under the lock: a writer that replaces the profile whi
 test("a lock that is not a private regular file is refused as PROFILE_WRITE_LOCKED and left in place", () => {
   const f = fixture();
   writeFileSync(f.lockPath, "{}\n", { mode: 0o644 });
-  expect(() => activateSelectionProfile(profile("revision-B"), f.snapshotA, f.options)).toThrow(expect.objectContaining({ code: "PROFILE_WRITE_LOCKED" }));
+  expect(() => activateSelectionProfile(profile("revision-B"), f.snapshotA, f.options)).toThrow(expect.objectContaining({ code: "PROFILE_WRITE_LOCKED", message: expect.stringContaining(f.lockPath) }));
   expect(readFileSync(f.lockPath, "utf8")).toBe("{}\n");
   expect(readFileSync(f.file)).toEqual(f.bytesA);
 });
@@ -144,6 +168,7 @@ if (hostBound) test("a dead holder's host-bound lock is preserved in profile-loc
   const { selfStart: _, ...identity } = hostIdentity();
   const pid = exitedPid();
   const lock = f.hold({ schemaVersion: 2, operationId: randomUUID(), profileId: "fleet", pid, ...identity, processStart: "gone:1" }, 60_000);
+  expect(inspectProfileWriteLock("fleet", f.options)).toMatchObject({ locked: true, schemaVersion: 2, pid, holder: "absent", hostBound: true, sameHostAndBoot: true, recoverableAutomatically: true });
   activateSelectionProfile(profile("revision-B"), f.snapshotA, f.options);
   expect(readSelectionProfile("fleet", f.options)?.profile.profileRevision).toBe("revision-B");
   const recoveries = join(f.options.cacheDir, "profile-lock-recoveries");
