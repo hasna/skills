@@ -370,7 +370,8 @@ export function inspectProfileWriteLock(profileId: string, options: SelectionCac
     profileId, path, locked: true as const, schemaVersion: lock.marker.schemaVersion, pid: lock.marker.pid,
     host: lock.marker.host ?? null, lockMtime: new Date(lock.mtimeMs).toISOString(), lockSha256: lock.sha256, hostBound,
     sameHostAndBoot: hostBound && !!local && lock.marker.host === local.host && lock.marker.bootId === local.bootId && lock.marker.pidNamespace === local.pidNamespace,
-    holder: owner.state, holderStartMatches: owner.state === "alive" ? owner.start === lock.marker.processStart : null,
+    // A schema-1 lock records no start time, so PID reuse cannot be decided.
+    holder: owner.state, holderStartMatches: owner.state === "alive" && lock.marker.processStart ? owner.start === lock.marker.processStart : null,
     recoverableAutomatically: hostBound && writerIsGone(lock, false),
   };
 }

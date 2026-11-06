@@ -135,10 +135,12 @@ test("context restoration keeps native and bundle integrity refusals blocking wi
   }
 });
 
-test("exact two shipped Sumi renderers remain recognized and modified bytes refuse", () => {
+test("exact shipped Sumi renderers remain recognized and modified bytes refuse", () => {
   for (const [name, digest] of [
     ["sumi-plugin-v1.js", "19e3798e4924ef9ef4004ace2addfc581d7fdd60172825cf1dbdc0a8e881de7c"],
     ["sumi-plugin-v2.js", "9d41d2e8312a379df3eb6af19e5b2deb709e1b1a63c04a69f40065a056b5a3f1"],
+    // v3 as 0.10.93 and main 82a6720b render it, independent of the current renderer.
+    ["sumi-plugin-v3.js", "8e960dc50ccfe27fc785154cb1b6696ded29888456a22a6c15ef6a6fcd9f37a8"],
   ]) {
     const text = readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
     expect(createHash("sha256").update(text).digest("hex")).toBe(digest!);

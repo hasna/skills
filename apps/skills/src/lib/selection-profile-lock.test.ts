@@ -125,8 +125,8 @@ test("a live holder past the bounded wait refuses PROFILE_WRITE_BUSY; the lock a
   const started = performance.now();
   expect(() => activateSelectionProfile(profile("revision-B"), f.snapshotA, f.options)).toThrow(expect.objectContaining({ code: "PROFILE_WRITE_BUSY", message: expect.stringContaining(f.lockPath) }));
   expect(performance.now() - started).toBeGreaterThanOrEqual(PROFILE_WRITE_LOCK_WAIT_MS - 50);
-  expect(inspectProfileWriteLock("fleet", f.options)).toMatchObject({ profileId: "fleet", path: f.lockPath, locked: true, schemaVersion: 1, pid: process.pid, holder: "alive", hostBound: false, recoverableAutomatically: false });
-  expect(readFileSync(f.lockPath, "utf8")).toBe(lock);
+  // A schema-1 lock records no start time, so PID reuse is undecidable (null), never "reused".
+  expect(inspectProfileWriteLock("fleet", f.options)).toMatchObject({ profileId: "fleet", path: f.lockPath, locked: true, schemaVersion: 1, pid: process.pid, holder: "alive", holderStartMatches: null, hostBound: false, recoverableAutomatically: false });
   expect(readFileSync(f.lockPath, "utf8")).toBe(lock);
   expect(readFileSync(f.file)).toEqual(f.bytesA);
 });

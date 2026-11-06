@@ -15,7 +15,10 @@ const CONTEXT_ERROR_CODES = new Set([
   "SELECTION_PROFILE_CHANGED", "INVALID_PROFILE_PRECONDITION", "PROFILE_WRITE_BUSY", "PROFILE_WRITE_LOCKED", "PROFILE_WRITE_LOCK_CHANGED", "PROFILE_LOCK_RECOVERY_INCOMPLETE",
 ]);
 
-/** Fixed codes only; generated native adapters must never copy refusal prose. */
+/**
+ * Fixed codes only; generated native adapters must never copy refusal prose.
+ * The released Sumi v3 adapter keeps its own frozen copy (agent-sumi.ts).
+ */
 export const HOOK_REFUSAL_REASON_CODES: readonly string[] = Object.freeze([
   ...CONTEXT_ERROR_CODES, "SKILLS_HOOK_FAILED", "SKILLS_HOOK_TIMEOUT", "SKILLS_HOOK_INVALID_RESPONSE",
 ]);
