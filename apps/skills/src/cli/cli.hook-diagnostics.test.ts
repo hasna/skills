@@ -124,6 +124,18 @@ test("a SessionStart refresh continues from the verified profile only when it co
   }
 });
 
+test("a SessionStart refresh refused by a concurrent profile writer or its lock continues from the last verified profile", async () => {
+  const f = await fixture();
+  const context = { SKILLS_TEST_CHILD_EXIT: "0", SKILLS_TEST_CHILD_STDOUT: JSON.stringify({ context: "Verified fixture context" }) };
+  for (const code of ["SELECTION_PROFILE_CHANGED", "PROFILE_WRITE_BUSY", "PROFILE_WRITE_LOCKED"]) {
+    const result = await f.hook({ ...context, SKILLS_TEST_SYNC_STDOUT: JSON.stringify({ error: { code, message: "untrusted fixture message" } }) }, "SessionStart");
+    expect(result.value.continue).not.toBe(false);
+    expect(result.value.hookSpecificOutput.additionalContext).toContain("Verified fixture context");
+    expect(result.value.hookSpecificOutput.additionalContext).toContain(`Skills profile refresh did not finish at session start [${code}] (stage=sync)`);
+    expect(result.stdout).not.toContain("untrusted fixture message");
+  }
+});
+
 test("typed delivery failures continue every maintained lifecycle without child payload or native fallback", async () => {
   const f = await fixture();
   const unavailable = ["SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN", "SKILLS_API_RESOURCE_UNAVAILABLE", "PROFILE_LOCK_MISMATCH", "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_WRITE_LOCKED", "SESSION_CONTEXT_CONFLICT", "SESSION_PARENT_CHANGED"];

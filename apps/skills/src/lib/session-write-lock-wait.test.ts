@@ -35,7 +35,7 @@ async function fixture() {
   const profile: ResolvedSkillProfile = { authority: AUTHORITY, workspaceId: "org-test", profileId: "fleet", profileRevision: "r1", selections: ["alpha-skill", "beta-skill"].map(slug => ({
     authority: AUTHORITY, workspaceId: "org-test", profileRevision: "r1", slug, version: "1.0.0", bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: [slug.replace("-", " ")] },
   })) };
-  activateSelectionProfile(profile, { cacheDir });
+  activateSelectionProfile(profile, null, { cacheDir });
   await cacheSelectionBundle(profile.selections[0]!, new Response(bundle.bytes), { cacheDir });
   writeSelectionJson(sessionReceiptPath("parent", { cacheDir }), { schemaVersion: 1, verifiedAt: new Date().toISOString(), profile, sessionId: "parent", generation: 1, loaded: [selectionKey(profile.selections[0]!)] });
   const options = { cacheDir, cached: true, authority: AUTHORITY };

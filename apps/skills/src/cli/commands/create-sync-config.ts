@@ -157,6 +157,7 @@ export function registerCreateSync(parent: Command) {
     .option("--profile <id>", "Selection profile (alias for --selection-profile; use before sync for credential profile)")
     .option("--project", "Record exact selected versions in this project's lockfile", false)
     .option("--no-station-report", "Verify and activate the selected profile without reporting station state")
+    .option("--expect-profile-sha256 <sha256>", "Activate only while the cached profile is exactly the preserved bytes with this SHA-256 ('absent' when none is cached)")
     .argument("[names...]", "Skills to sync (default: every skill in this machine's corpus)")
     .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
     .option("--all", "Sync every corpus skill (the default)", false)
@@ -225,9 +226,9 @@ function handleCreate(name: string, options: { category: string; description?: s
 
 async function handleSync(
   names: string[],
-  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean; station?: string; populate: boolean; repoRoot?: string; homesRoot?: string; selectionProfile?: string; profile?: string; project?: boolean; stationReport?: boolean },
+  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean; station?: string; populate: boolean; repoRoot?: string; homesRoot?: string; selectionProfile?: string; profile?: string; project?: boolean; stationReport?: boolean; expectProfileSha256?: string },
 ) {
-  const profileSync = options.selectionProfile || options.profile || options.project || options.stationReport === false || requiresCliSkillLoading() ||
+  const profileSync = options.selectionProfile || options.profile || options.project || options.stationReport === false || options.expectProfileSha256 !== undefined || requiresCliSkillLoading() ||
     (!names.length && !options.source && !options.adopt && !options.prune && !options.station && !options.all && !options.dryRun && !options.force && options.for === "all" && !options.check);
   if (profileSync) {
     if (names.length || options.source || options.adopt || options.prune || options.force || options.populate || options.repoRoot || options.homesRoot || options.for !== "all") {

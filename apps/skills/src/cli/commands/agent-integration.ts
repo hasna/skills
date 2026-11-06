@@ -107,7 +107,7 @@ export function capManagedHookContext(context: string, maxChars = managedHookCon
   return `${cut > 0 ? head.slice(0, cut) : head}\n${HOOK_CONTEXT_TRUNCATED}`;
 }
 /** SessionStart refresh failures after which context still comes from the last verified profile. */
-const SESSION_START_SYNC_CONTINUES = new Set(["SKILLS_HOOK_TIMEOUT", "SKILLS_API_UNAVAILABLE"]);
+const SESSION_START_SYNC_CONTINUES = new Set(["SKILLS_HOOK_TIMEOUT", "SKILLS_API_UNAVAILABLE", "SELECTION_PROFILE_CHANGED", "PROFILE_WRITE_BUSY", "PROFILE_WRITE_LOCKED"]);
 
 /** Called only after the configured native bridge has been verified. */
 function pinnedHookProfile(input: unknown, configuredProfile: string): string {

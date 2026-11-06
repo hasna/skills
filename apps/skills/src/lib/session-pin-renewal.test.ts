@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { packSkillBundle, SkillBundleInspectionError } from "./skill-bundle.js";
 import { createHash } from "node:crypto";
 import { reconcileSkillSession, reconcileSkillSessionIfSafe, renewSkillSessionPin, SESSION_RENEWAL_REFUSAL_TTL_MS, SESSION_RENEWAL_TIMEOUT_MS } from "./session-reconciliation.js";
-import { activateSelectionProfile, cacheSelectionBundle, readSkillSessionSnapshot, selectionKey, sessionReceiptPath, skillSessionSnapshotBinding, SkillSelectionError, writeSelectionJson, writeSkillSession } from "./selection-cache.js";
+import { activateSelectionProfile, cacheSelectionBundle, readSelectionProfileSnapshot, readSkillSessionSnapshot, selectionProfilePrecondition, selectionKey, sessionReceiptPath, skillSessionSnapshotBinding, SkillSelectionError, writeSelectionJson, writeSkillSession } from "./selection-cache.js";
 import { buildSkillContext } from "./skill-context.js";
 import type { ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
@@ -195,13 +195,13 @@ test("a remembered refusal never authorizes: an authority that would now renew i
 
 for (const change of ["receipt", "revision"] as const) test(`a changed ${change} invalidates the remembered refusal`, async () => {
   const f = await fixture(); f.target.selections = [];
-  activateSelectionProfile({ ...f.target, profileRevision: "current" }, f);
+  activateSelectionProfile({ ...f.target, profileRevision: "current" }, selectionProfilePrecondition(readSelectionProfileSnapshot(f.target.profileId, f)), f);
   const c = counted(f);
   await expect(reconcileSkillSessionIfSafe("session", "fleet", c.at(0))).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
   await expect(reconcileSkillSessionIfSafe("session", "fleet", c.at(1))).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
   expect(c.reads()).toBe(1);
   if (change === "receipt") { const snapshot = readSkillSessionSnapshot("session", f); writeSkillSession(snapshot.receipt, { current: skillSessionSnapshotBinding(snapshot) }, f); }
-  else activateSelectionProfile({ ...f.target, profileRevision: "synced-later", selections: [] }, f);
+  else activateSelectionProfile({ ...f.target, profileRevision: "synced-later", selections: [] }, selectionProfilePrecondition(readSelectionProfileSnapshot(f.target.profileId, f)), f);
   const before = readFileSync(sessionReceiptPath("session", f));
   await expect(reconcileSkillSessionIfSafe("session", "fleet", c.at(2))).rejects.toMatchObject({ code: "SESSION_RECONCILIATION_REQUIRED" });
   expect(c.reads()).toBe(2);

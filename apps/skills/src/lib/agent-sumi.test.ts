@@ -81,6 +81,23 @@ test("exact previous managed Sumi plugin upgrades with preservation; modified by
   expect(() => planAgentIntegration(options)).toThrow("modified Sumi");
 });
 
+test("the released v3 Sumi plugin stays managed: the live check passes and hook install upgrades it without a modified-plugin refusal", () => {
+  const released = readFileSync(new URL("./fixtures/sumi-plugin-v3.js", import.meta.url), "utf8");
+  // The exact bytes 0.10.93 installs; a hook code added later must not change them.
+  expect(createHash("sha256").update(released).digest("hex")).toBe("8e960dc50ccfe27fc785154cb1b6696ded29888456a22a6c15ef6a6fcd9f37a8");
+  expect(isManagedSumiPlugin(released, "skills", "default")).toBe(true);
+  const home = fixture(), dataDir = join(home, "skills-data");
+  const options = { home, dataDir, agents: ["sumi" as const], command: "skills", profileId: "default" };
+  applyAgentIntegration(planAgentIntegration(options));
+  const plugin = join(sumiConfigDirectory(home), "plugins/skills-cli.js"); put(plugin, released);
+  expect(() => assertManagedAgentBridge("sumi", { home, dataDir, projectDir: home })).not.toThrow();
+  expect(() => applyAgentIntegration(planAgentIntegration(options))).not.toThrow();
+  expect(readFileSync(plugin, "utf8")).toBe(renderSumiPlugin("skills", "default"));
+  expect(() => assertManagedAgentBridge("sumi", { home, dataDir, projectDir: home })).not.toThrow();
+  // The current render is still the released v3 file, for the fleet profile too.
+  expect(createHash("sha256").update(renderSumiPlugin("skills", "fleet")).digest("hex")).toBe("46dad478d2af5d888feb75b129eb4ccd68cadfdce2f468e6a57cd2c24b970855");
+});
+
 test("read-only Sumi resolver honors native selectors and adopted roots without creating state", () => {
   const home = fixture(), canonical = join(home, ".hasna-internal/sumi/config"), legacy = join(home, ".config/sumi");
   expect(sumiConfigDirectory(home, {})).toBe(canonical);

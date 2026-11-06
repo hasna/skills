@@ -12,9 +12,13 @@ const CONTEXT_ERROR_CODES = new Set([
   "SESSION_GENERATION_EXHAUSTED", "SESSION_PARENT_CHANGED", "SESSION_RECEIPT_CHANGED",
   "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT",
   "SESSION_CONTEXT_CONFLICT", "SESSION_RECONCILIATION_INCOMPLETE", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED", "SESSION_LOCK_RECOVERY_INCOMPLETE",
+  "SELECTION_PROFILE_CHANGED", "INVALID_PROFILE_PRECONDITION", "PROFILE_WRITE_BUSY", "PROFILE_WRITE_LOCKED", "PROFILE_WRITE_LOCK_CHANGED", "PROFILE_LOCK_RECOVERY_INCOMPLETE",
 ]);
 
-/** Fixed codes only; generated native adapters must never copy refusal prose. */
+/**
+ * Fixed codes only; generated native adapters must never copy refusal prose.
+ * The released Sumi v3 adapter keeps its own frozen copy (agent-sumi.ts).
+ */
 export const HOOK_REFUSAL_REASON_CODES: readonly string[] = Object.freeze([
   ...CONTEXT_ERROR_CODES, "SKILLS_HOOK_FAILED", "SKILLS_HOOK_TIMEOUT", "SKILLS_HOOK_INVALID_RESPONSE",
 ]);
@@ -90,6 +94,9 @@ const OPTIONAL_CONTEXT_FAILURES = new Set([
   // explicit context/load/run remain strict and never repair the lock here.
   "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_WRITE_BUSY", "SESSION_WRITE_LOCKED",
   "SESSION_PARENT_CHANGED", "SESSION_CONTEXT_CONFLICT", "SKILLS_HOOK_TIMEOUT",
+  // A refresh that another profile writer superseded, or that met a held or
+  // unsafe profile lock, wrote nothing; the last verified profile still serves.
+  "SELECTION_PROFILE_CHANGED", "PROFILE_WRITE_BUSY", "PROFILE_WRITE_LOCKED",
 ]);
 export function isOptionalHookContextFailure(error: unknown): error is HookDiagnosticError {
   return error instanceof HookDiagnosticError && OPTIONAL_CONTEXT_FAILURES.has(error.code);

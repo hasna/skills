@@ -117,6 +117,10 @@ function assertRegularPath(path: string, createParents = false): void {
   }
 }
 function readRegularFile(path: string, limit: number): Uint8Array | null {
+  return readRegularFileIdentity(path, limit)?.bytes ?? null;
+}
+/** One opened file's bytes with its own inode, so a concurrent rename cannot pair one file's bytes with another's identity. */
+function readRegularFileIdentity(path: string, limit: number): { bytes: Uint8Array; dev: number; ino: number } | null {
   assertRegularPath(path);
   let fd: number;
   try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
@@ -133,7 +137,7 @@ function readRegularFile(path: string, limit: number): Uint8Array | null {
       size += read;
     }
     if (size > stat.size) throw new SkillSelectionError("INVALID_CACHE_FILE", "The Skills cache file grew during its bounded read.");
-    return bytes.subarray(0, size);
+    return { bytes: bytes.subarray(0, size), dev: stat.dev, ino: stat.ino };
   } finally { closeSync(fd); }
 }
 export function writeSelectionJson(path: string, value: unknown): void {
@@ -266,16 +270,110 @@ export async function cacheSelectionBundle(selection: ResolvedSkillSelection, re
 function profilePath(profileId: string, options: SelectionCacheOptions): string {
   return join(selectionCacheRoot(options), "profiles", `${hash(profileId)}.json`);
 }
-export function activateSelectionProfile(profile: ResolvedSkillProfile, options: SelectionCacheOptions = {}): CachedSelectionProfile {
+/** The cached profile file a writer read: the SHA-256 of its exact bytes and its inode. */
+export interface SelectionProfilePrecondition { sha256: string; dev: number; ino: number }
+export interface SelectionProfileSnapshot extends SelectionProfilePrecondition { path: string; receipt: CachedSelectionProfile }
+export function readSelectionProfileSnapshot(profileId: string, options: SelectionCacheOptions = {}): SelectionProfileSnapshot | null {
+  const path = profilePath(profileId, options);
+  const file = readRegularFileIdentity(path, MAX_PROFILE_DOCUMENT_BYTES);
+  if (!file) return null;
+  let receipt: CachedSelectionProfile;
+  try { receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(file.bytes)) as CachedSelectionProfile; }
+  catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills selection receipt is unreadable; sync the profile again."); }
+  validateSelectionReceipt(receipt);
+  return { path, receipt, sha256: sha256Hex(file.bytes), dev: file.dev, ino: file.ino };
+}
+export function selectionProfilePrecondition(snapshot: SelectionProfileSnapshot | null): SelectionProfilePrecondition | null {
+  return snapshot ? { sha256: snapshot.sha256, dev: snapshot.dev, ino: snapshot.ino } : null;
+}
+function isProfilePrecondition(expected: unknown): expected is SelectionProfilePrecondition | null {
+  if (expected === null) return true;
+  if (!expected || typeof expected !== "object") return false;
+  const { sha256, dev, ino } = expected as Record<string, unknown>;
+  return typeof sha256 === "string" && /^[a-f0-9]{64}$/.test(sha256)
+    && typeof dev === "number" && Number.isFinite(dev) && typeof ino === "number" && Number.isFinite(ino);
+}
+/**
+ * How long an activation waits for another live holder of the profile write
+ * lock before it refuses with PROFILE_WRITE_BUSY. Holders keep the lock only
+ * for one compare and one atomic rename.
+ */
+export const PROFILE_WRITE_LOCK_WAIT_MS = 2_000;
+/**
+ * Replace the cached profile only while it is still exactly `expected` (null:
+ * still absent): the comparison and the rename run under the profile write
+ * lock that every activation takes. A profile that changed after the writer
+ * read it refuses with SELECTION_PROFILE_CHANGED and nothing is written.
+ * Readers never take the lock; they see the old or the new file. Under
+ * contention this blocks the calling thread for at most PROFILE_WRITE_LOCK_WAIT_MS.
+ */
+export function activateSelectionProfile(profile: ResolvedSkillProfile, expected: SelectionProfilePrecondition | null, options: SelectionCacheOptions = {}): CachedSelectionProfile {
   validateResolvedProfile(profile);
+  if (!isProfilePrecondition(expected)) {
+    throw new SkillSelectionError("INVALID_PROFILE_PRECONDITION", "A profile activation must name the cached profile snapshot it replaces, or null when none is cached.");
+  }
   const receipt: CachedSelectionProfile = { schemaVersion: 1, verifiedAt: new Date((options.now ?? Date.now)()).toISOString(), profile };
-  writeSelectionJson(profilePath(profile.profileId, options), receipt);
+  const path = profilePath(profile.profileId, options);
+  return withWriteLocks(PROFILE_LOCK, [profile.profileId], options, assertOwned => {
+    const current = readRegularFileIdentity(path, MAX_PROFILE_DOCUMENT_BYTES);
+    const unchanged = current === null ? expected === null
+      : expected !== null && sha256Hex(current.bytes) === expected.sha256 && current.dev === expected.dev && current.ino === expected.ino;
+    if (!unchanged) {
+      // Another writer committed after this one read the profile. When it
+      // committed this exact selection nothing would be lost: a fresh receipt
+      // is kept as it is (same bytes and inode, so writers holding its
+      // snapshot are not refused in turn), and an expired one is re-stamped.
+      const committed = current ? sameSelectionReceipt(current.bytes, profile, options) : null;
+      if (committed === "fresh") return readSelectionReceiptBytes(current!.bytes);
+      if (committed !== "expired") {
+        throw new SkillSelectionError("SELECTION_PROFILE_CHANGED", "The cached Skills profile changed to a different selection after this writer read it; nothing was written. Preserve the current profile if it matters, then sync again.");
+      }
+    }
+    assertOwned();
+    writeSelectionJson(path, receipt);
+    return receipt;
+  }, PROFILE_WRITE_LOCK_WAIT_MS);
+}
+function readSelectionReceiptBytes(bytes: Uint8Array): CachedSelectionProfile {
+  const receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as CachedSelectionProfile;
+  validateSelectionReceipt(receipt);
   return receipt;
 }
+/**
+ * Whether a cached receipt holds exactly `profile` (identity, revision and
+ * every selection; verifiedAt is not content), and if so whether it is still
+ * within the cached-profile age bound. Null for different or unreadable content.
+ */
+function sameSelectionReceipt(bytes: Uint8Array, profile: ResolvedSkillProfile, options: SelectionCacheOptions): "fresh" | "expired" | null {
+  let receipt: CachedSelectionProfile;
+  try { receipt = readSelectionReceiptBytes(bytes); } catch { return null; }
+  if (!isDeepStrictEqual(receipt.profile, JSON.parse(JSON.stringify(profile)))) return null;
+  try { assertFreshCachedProfile(receipt, options); return "fresh"; } catch { return "expired"; }
+}
 export function readSelectionProfile(profileId: string, options: SelectionCacheOptions = {}): CachedSelectionProfile | null {
-  const receipt = readSelectionJson<CachedSelectionProfile>(profilePath(profileId, options));
-  if (receipt) validateSelectionReceipt(receipt);
-  return receipt;
+  return readSelectionProfileSnapshot(profileId, options)?.receipt ?? null;
+}
+/**
+ * Read-only view of the cached profile's write lock: what it names and what
+ * this host can prove about its holder. It never moves or changes the lock.
+ * A writer moves a lock aside on its own only when recoverableAutomatically
+ * is true; otherwise it is safe to move only once its holder (pid on host) is
+ * known to have exited.
+ */
+export function inspectProfileWriteLock(profileId: string, options: SelectionCacheOptions = {}) {
+  const path = PROFILE_LOCK.path(profileId, options);
+  const lock = readWriteLock(PROFILE_LOCK, profileId, options);
+  if (!lock) return { profileId, path, locked: false as const };
+  const owner = processStart(lock.marker.pid), local = localLockIdentity();
+  const hostBound = lock.marker.schemaVersion === 2;
+  return {
+    profileId, path, locked: true as const, schemaVersion: lock.marker.schemaVersion, pid: lock.marker.pid,
+    host: lock.marker.host ?? null, lockMtime: new Date(lock.mtimeMs).toISOString(), lockSha256: lock.sha256, hostBound,
+    sameHostAndBoot: hostBound && !!local && lock.marker.host === local.host && lock.marker.bootId === local.bootId && lock.marker.pidNamespace === local.pidNamespace,
+    // A schema-1 lock records no start time, so PID reuse cannot be decided.
+    holder: owner.state, holderStartMatches: owner.state === "alive" && lock.marker.processStart ? owner.start === lock.marker.processStart : null,
+    recoverableAutomatically: hostBound && writerIsGone(lock, false),
+  };
 }
 export function validateSelectionReceipt(receipt: CachedSelectionProfile): void {
   if (!receipt || receipt.schemaVersion !== 1 || !Number.isFinite(Date.parse(receipt.verifiedAt))) throw new SkillSelectionError("INVALID_RECEIPT", "The Skills selection receipt is invalid.");
@@ -376,17 +474,50 @@ export function skillSessionSnapshotBinding(snapshot: SkillSessionSnapshot): Ski
   return { sessionId: snapshot.sessionId, generation: snapshot.generation, receiptSha256: snapshot.receiptSha256 };
 }
 
-interface OwnedSessionLock { path: string; stagingPath: string; fd: number; dev: number; ino: number }
-interface SessionLockMarker {
-  schemaVersion: 1 | 2; operationId: string; sessionId: string; pid: number;
+interface OwnedWriteLock { path: string; stagingPath: string; fd: number; dev: number; ino: number }
+/** A write lock's owner. A session lock names its sessionId, a profile lock its profileId. */
+interface WriteLockMarker {
+  schemaVersion: 1 | 2; operationId: string; sessionId?: string; profileId?: string; pid: number;
   host?: string; bootId?: string; pidNamespace?: string; processStart?: string;
   publication?: "hard-link-v1";
 }
-interface SessionLockSnapshot {
-  path: string; bytes: Uint8Array; marker: SessionLockMarker; sha256: string;
+interface WriteLockSnapshot {
+  path: string; bytes: Uint8Array; marker: WriteLockMarker; sha256: string;
   dev: number; ino: number; mtimeMs: number;
   stagingPath?: string;
 }
+/** What a stale-lock recovery must still find unchanged: the guarded file as it was when the lock was judged stale. */
+interface WriteLockFence { expected: string | null; current(): string | null; record: Record<string, unknown> }
+/**
+ * The files that share one write-lock protocol: each session receipt, and each
+ * cached selection profile. Every writer of either holds its lock beside it.
+ */
+interface WriteLockKind {
+  noun: "session" | "profile"; code: "SESSION" | "PROFILE"; field: "sessionId" | "profileId"; recoveries: string;
+  path(id: string, options: SelectionCacheOptions): string;
+  fence(id: string, options: SelectionCacheOptions): WriteLockFence;
+}
+function sessionLockFence(sessionId: string, options: SelectionCacheOptions, receipt: SkillSessionSnapshot | null): WriteLockFence {
+  const state = (snapshot: SkillSessionSnapshot | null) => snapshot ? `${snapshot.sha256}:${snapshot.generation}` : null;
+  return { expected: state(receipt), current: () => state(readSkillSessionSnapshotIfExists(sessionId, options)),
+    record: { receiptSha256: receipt?.sha256 ?? null, receiptGeneration: receipt?.generation ?? null } };
+}
+function profileLockFence(profileId: string, options: SelectionCacheOptions): WriteLockFence {
+  const read = () => readRegularFileIdentity(profilePath(profileId, options), MAX_PROFILE_DOCUMENT_BYTES);
+  const state = (file: ReturnType<typeof read>) => file ? `${sha256Hex(file.bytes)}:${file.dev}:${file.ino}` : null;
+  const file = read();
+  return { expected: state(file), current: () => state(read()), record: { profileSha256: file ? sha256Hex(file.bytes) : null } };
+}
+const SESSION_LOCK: WriteLockKind = {
+  noun: "session", code: "SESSION", field: "sessionId", recoveries: "session-lock-recoveries",
+  path: (sessionId, options) => `${sessionReceiptPath(sessionId, options)}.write-lock`,
+  fence: (sessionId, options) => sessionLockFence(sessionId, options, readSkillSessionSnapshotIfExists(sessionId, options)),
+};
+const PROFILE_LOCK: WriteLockKind = {
+  noun: "profile", code: "PROFILE", field: "profileId", recoveries: "profile-lock-recoveries",
+  path: (profileId, options) => `${profilePath(profileId, options)}.write-lock`,
+  fence: profileLockFence,
+};
 const SESSION_LOCK_MAX_BYTES = 4096;
 const SESSION_LOCK_MIN_AGE_MS = 30_000;
 
@@ -426,7 +557,7 @@ function processStart(pid: number): { state: "alive"; start: string } | { state:
   return { state: "unknown" };
 }
 
-type LocalLockIdentity = Pick<SessionLockMarker, "host" | "bootId" | "pidNamespace" | "processStart">;
+type LocalLockIdentity = Pick<WriteLockMarker, "host" | "bootId" | "pidNamespace" | "processStart">;
 /**
  * This process's boot, namespace and start time cannot change while it runs.
  * Probing them spawns sysctl and ps on macOS, so the first complete answer is
@@ -451,27 +582,31 @@ function probeLocalLockIdentity(): LocalLockIdentity | null {
   return { host: hostname(), bootId, pidNamespace, processStart: owner.start };
 }
 
-function readSessionLock(sessionId: string, options: SelectionCacheOptions): SessionLockSnapshot | null {
-  const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
+function readSessionLock(sessionId: string, options: SelectionCacheOptions): WriteLockSnapshot | null {
+  return readWriteLock(SESSION_LOCK, sessionId, options);
+}
+function readWriteLock(kind: WriteLockKind, id: string, options: SelectionCacheOptions): WriteLockSnapshot | null {
+  const path = kind.path(id, options), locked = `${kind.code}_WRITE_LOCKED`;
+  const subject = kind.code === "SESSION" ? "The session lock" : `The ${kind.noun} lock ${path}`;
   const before = lstatSync(path, { throwIfNoEntry: false });
   if (!before) return null;
   if (!before.isFile() || ![1, 2].includes(before.nlink) || (before.mode & 0o077) !== 0 || (process.getuid && before.uid !== process.getuid())) {
-    throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock is not a private regular file; recovery requires review.");
+    throw new SkillSelectionError(locked, `${subject} is not a private regular file; recovery requires review.`);
   }
   const bytes = readRegularFile(path, SESSION_LOCK_MAX_BYTES);
   const after = lstatSync(path, { throwIfNoEntry: false });
   if (!bytes || !after?.isFile() || before.dev !== after.dev || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs || before.mode !== after.mode || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink) {
-    throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock changed during inspection; recovery requires review.");
+    throw new SkillSelectionError(locked, `${subject} changed during inspection; recovery requires review.`);
   }
-  let marker: SessionLockMarker;
+  let marker: WriteLockMarker;
   try { marker = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-  catch { throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock is unreadable; recovery requires review."); }
-  if (!marker || ![1, 2].includes(marker.schemaVersion) || marker.sessionId !== sessionId
+  catch { throw new SkillSelectionError(locked, `${subject} is unreadable; recovery requires review.`); }
+  if (!marker || ![1, 2].includes(marker.schemaVersion) || marker[kind.field] !== id
       || !/^[a-f0-9-]{36}$/i.test(marker.operationId) || !Number.isSafeInteger(marker.pid) || marker.pid <= 0
       || (marker.publication !== undefined && marker.publication !== "hard-link-v1")
       || (marker.schemaVersion === 2 && (!marker.host || !marker.bootId || !marker.processStart
         || (process.platform === "linux" && !marker.pidNamespace)))) {
-    throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock has invalid ownership metadata; recovery requires review.");
+    throw new SkillSelectionError(locked, `${subject} has invalid ownership metadata; recovery requires review.`);
   }
   // A second link is valid only for this writer's exact initialized staging
   // inode. An interruption before staged-name cleanup can leave this pair.
@@ -482,7 +617,7 @@ function readSessionLock(sessionId: string, options: SelectionCacheOptions): Ses
     const staged = lstatSync(stagingPath, { throwIfNoEntry: false });
     if (marker.publication !== "hard-link-v1" || !staged?.isFile() || staged.dev !== after.dev || staged.ino !== after.ino
       || staged.nlink !== 2 || staged.mode !== after.mode || staged.uid !== after.uid || staged.gid !== after.gid) {
-      throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The session lock has an unbound publication link; recovery requires review.");
+      throw new SkillSelectionError(locked, `${subject} has an unbound publication link; recovery requires review.`);
     }
   }
   return { path, bytes, marker, sha256: sha256Hex(bytes), dev: after.dev, ino: after.ino, mtimeMs: after.mtimeMs, stagingPath };
@@ -491,7 +626,7 @@ function readSessionLock(sessionId: string, options: SelectionCacheOptions): Ses
 /** Publish complete ownership with atomic no-replace semantics. The
  * descriptor remains owned until release; a crash never exposes an
  * empty marker, and an existing lock is never overwritten. */
-function publishSessionLock(path: string, marker: SessionLockMarker): OwnedSessionLock {
+function publishWriteLock(kind: WriteLockKind, path: string, marker: WriteLockMarker): OwnedWriteLock {
   const stagingPath = `${path}.${marker.operationId}.prepared`;
   const bytes = Buffer.from(`${JSON.stringify({ ...marker, publication: "hard-link-v1" })}\n`);
   const fd = openSync(stagingPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -507,7 +642,7 @@ function publishSessionLock(path: string, marker: SessionLockMarker): OwnedSessi
     // A crash before this removal leaves the exact publication witness above.
     const staged = lstatSync(stagingPath);
     if (!staged.isFile() || staged.dev !== stat.dev || staged.ino !== stat.ino) {
-      throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The initialized lock staging inode changed before publication completed.");
+      throw new SkillSelectionError(`${kind.code}_WRITE_LOCK_CHANGED`, "The initialized lock staging inode changed before publication completed.");
     }
     unlinkSync(stagingPath);
     syncDirectory(dirname(path));
@@ -525,7 +660,7 @@ function publishSessionLock(path: string, marker: SessionLockMarker): OwnedSessi
   }
 }
 
-function writerIsGone(lock: SessionLockSnapshot, explicitLocalHost: boolean): boolean {
+function writerIsGone(lock: WriteLockSnapshot, explicitLocalHost: boolean): boolean {
   if (Date.now() - lock.mtimeMs < SESSION_LOCK_MIN_AGE_MS) return false;
   const owner = processStart(lock.marker.pid);
   if (owner.state === "unknown") return false;
@@ -536,7 +671,7 @@ function writerIsGone(lock: SessionLockSnapshot, explicitLocalHost: boolean): bo
   return owner.state === "absent" || (owner.state === "alive" && owner.start !== lock.marker.processStart);
 }
 
-function lockReviewDigest(lock: SessionLockSnapshot, receipt: SkillSessionSnapshot | null): string {
+function lockReviewDigest(lock: WriteLockSnapshot, receipt: SkillSessionSnapshot | null): string {
   return hash({ sessionId: lock.marker.sessionId, lockSha256: lock.sha256, lockDev: lock.dev,
     lockIno: lock.ino, lockMtimeMs: lock.mtimeMs, receiptSha256: receipt?.sha256 ?? null, receiptGeneration: receipt?.generation ?? null });
 }
@@ -550,7 +685,7 @@ export function inspectSessionWriteLock(sessionId: string, options: SelectionCac
     reviewDigest: lockReviewDigest(lock, receipt), hostBound: lock.marker.schemaVersion === 2 };
 }
 
-function archiveSessionLock(lock: SessionLockSnapshot, receipt: SkillSessionSnapshot | null, explicitLocalHost: boolean): string | null {
+function archiveWriteLock(kind: WriteLockKind, id: string, lock: WriteLockSnapshot, fence: WriteLockFence, explicitLocalHost: boolean): string | null {
   const guardPath = `${lock.path}.recovery-guard`;
   let guardFd: number;
   try { guardFd = openSync(guardPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
@@ -560,23 +695,22 @@ function archiveSessionLock(lock: SessionLockSnapshot, receipt: SkillSessionSnap
     writeFileSync(guardFd, `${JSON.stringify({ schemaVersion: 1, pid: process.pid, operationId: randomUUID() })}\n`);
     fsyncSync(guardFd);
     const cacheOptions = { cacheDir: dirname(dirname(lock.path)) };
-    const current = readSessionLock(lock.marker.sessionId, cacheOptions);
+    const current = readWriteLock(kind, id, cacheOptions);
     if (!current || current.dev !== lock.dev || current.ino !== lock.ino || current.sha256 !== lock.sha256
         || current.mtimeMs !== lock.mtimeMs || !writerIsGone(current, explicitLocalHost)) return null;
-    const currentReceipt = readSkillSessionSnapshotIfExists(lock.marker.sessionId, cacheOptions);
-    if (currentReceipt?.sha256 !== receipt?.sha256 || currentReceipt?.generation !== receipt?.generation) return null;
-    const directory = join(dirname(dirname(lock.path)), "session-lock-recoveries", randomUUID());
+    if (fence.current() !== fence.expected) return null;
+    const directory = join(dirname(dirname(lock.path)), kind.recoveries, randomUUID());
     const archivePath = join(directory, "original.write-lock");
     const recordPath = join(directory, "recovery.json");
     assertRegularPath(archivePath, true);
-    archiveBytes(recordPath, Buffer.from(`${JSON.stringify({ schemaVersion: 1, sessionId: lock.marker.sessionId,
+    archiveBytes(recordPath, Buffer.from(`${JSON.stringify({ schemaVersion: 1, [kind.field]: id,
       originalPath: lock.path, lockSha256: lock.sha256, lockMtime: new Date(lock.mtimeMs).toISOString(),
-      lockPid: lock.marker.pid, receiptSha256: receipt?.sha256 ?? null, receiptGeneration: receipt?.generation ?? null,
+      lockPid: lock.marker.pid, ...fence.record,
       status: "prepared" })}\n`));
     syncDirectory(directory); syncDirectory(dirname(directory));
-    const finalLock = readSessionLock(lock.marker.sessionId, cacheOptions);
+    const finalLock = readWriteLock(kind, id, cacheOptions);
     if (!finalLock || finalLock.dev !== lock.dev || finalLock.ino !== lock.ino || finalLock.sha256 !== lock.sha256
-        || readSkillSessionSnapshotIfExists(lock.marker.sessionId, cacheOptions)?.sha256 !== receipt?.sha256) return null;
+        || fence.current() !== fence.expected) return null;
     let moved = false;
     try {
       renameSync(lock.path, archivePath);
@@ -604,7 +738,7 @@ function archiveSessionLock(lock: SessionLockSnapshot, receipt: SkillSessionSnap
         }
       }
     } catch (error) {
-      if (moved) throw new SkillSelectionError("SESSION_LOCK_RECOVERY_INCOMPLETE", "The lock moved, but durable recovery could not be confirmed; inspect the preserved recovery directory and session receipt.");
+      if (moved) throw new SkillSelectionError(`${kind.code}_LOCK_RECOVERY_INCOMPLETE`, `The lock moved, but durable recovery could not be confirmed; inspect the preserved recovery directory and ${kind.noun} receipt.`);
       throw error;
     }
     return archivePath;
@@ -620,7 +754,7 @@ export function recoverSessionWriteLock(sessionId: string, reviewDigest: string,
   if (!lock || lockReviewDigest(lock, receipt) !== reviewDigest) {
     throw new SkillSelectionError("SESSION_LOCK_REVIEW_CHANGED", "The lock or receipt changed after review; inspect the session lock again.");
   }
-  const archivePath = archiveSessionLock(lock, receipt, true);
+  const archivePath = archiveWriteLock(SESSION_LOCK, sessionId, lock, sessionLockFence(sessionId, options, receipt), true);
   if (!archivePath) throw new SkillSelectionError("SESSION_WRITE_LOCKED", "The lock is live, too recent, or changed during recovery; leave it in place and inspect again.");
   return archivePath;
 }
@@ -654,13 +788,13 @@ const SESSION_LOCK_INSPECTIONS = 3;
  * SESSION_WRITE_LOCKED, and one that keeps changing is reported as "changing",
  * which a writer treats like a held lock.
  */
-function inspectSessionLockSettled(sessionId: string, options: SelectionCacheOptions): SessionLockSnapshot | null | "changing" {
-  const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
+function inspectWriteLockSettled(kind: WriteLockKind, id: string, options: SelectionCacheOptions): WriteLockSnapshot | null | "changing" {
+  const path = kind.path(id, options);
   let invalid: string | null | undefined;
   for (let attempt = 0; attempt < SESSION_LOCK_INSPECTIONS; attempt++) {
-    try { return readSessionLock(sessionId, options); }
+    try { return readWriteLock(kind, id, options); }
     catch (error) {
-      if (!(error instanceof SkillSelectionError) || error.code !== "SESSION_WRITE_LOCKED") throw error;
+      if (!(error instanceof SkillSelectionError) || error.code !== `${kind.code}_WRITE_LOCKED`) throw error;
       const seen = lockStatIdentity(path);
       if (seen !== null && seen === invalid) throw error;
       invalid = seen;
@@ -687,43 +821,46 @@ export function assertSessionWriteLockReadable(sessionId: string, options: Selec
   }
 }
 function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheOptions, action: (assertOwned: () => void) => T, waitMs = 0): T {
+  return withWriteLocks(SESSION_LOCK, sessionIds, options, action, waitMs);
+}
+function withWriteLocks<T>(kind: WriteLockKind, ids: string[], options: SelectionCacheOptions, action: (assertOwned: () => void) => T, waitMs = 0): T {
   const operationId = randomUUID();
   // Native identity probes can block. Finish them before creating any lock.
   const identity = localLockIdentity();
-  if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > SESSION_WRITE_LOCK_WAIT_MS) throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", "A session write lock wait must be within its supported bound.");
+  if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > Math.max(SESSION_WRITE_LOCK_WAIT_MS, PROFILE_WRITE_LOCK_WAIT_MS)) throw new SkillSelectionError("INVALID_CONTEXT_BUDGET", `A ${kind.noun} write lock wait must be within its supported bound.`);
   const waitUntil = performance.now() + waitMs;
-  const locks = [...new Set(sessionIds)].map(sessionId => ({ sessionId, path: `${sessionReceiptPath(sessionId, options)}.write-lock` }))
+  const locks = [...new Set(ids)].map(id => ({ id, path: kind.path(id, options) }))
     .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  const owned: OwnedSessionLock[] = [];
+  const owned: OwnedWriteLock[] = [];
   const assertOwned = () => {
     for (const lock of owned) {
       const current = lstatSync(lock.path, { throwIfNoEntry: false });
       if (!current?.isFile() || current.dev !== lock.dev || current.ino !== lock.ino) {
-        throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "A session write lock changed during the operation; no replacement is permitted.");
+        throw new SkillSelectionError(`${kind.code}_WRITE_LOCK_CHANGED`, `A ${kind.noun} write lock changed during the operation; no replacement is permitted.`);
       }
     }
   };
   try {
     for (const lock of locks) {
       assertRegularPath(lock.path, true);
-      const marker: SessionLockMarker = { schemaVersion: identity ? 2 : 1, operationId, sessionId: lock.sessionId, pid: process.pid, ...identity };
-      let acquired: OwnedSessionLock | undefined;
+      const marker = { schemaVersion: identity ? 2 : 1, operationId, [kind.field]: lock.id, pid: process.pid, ...identity } as WriteLockMarker;
+      let acquired: OwnedWriteLock | undefined;
       while (!acquired) {
-        try { acquired = publishSessionLock(lock.path, marker); break; }
+        try { acquired = publishWriteLock(kind, lock.path, marker); break; }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         }
         try {
-          const stale = readSessionLock(lock.sessionId, options);
-          const receipt = stale && readSkillSessionSnapshotIfExists(lock.sessionId, options);
-          if (stale?.marker.schemaVersion === 2 && writerIsGone(stale, false)) {
-            archiveSessionLock(stale, receipt, false);
+          const stale = readWriteLock(kind, lock.id, options);
+          const fence = stale && kind.fence(lock.id, options);
+          if (stale?.marker.schemaVersion === 2 && fence && writerIsGone(stale, false)) {
+            archiveWriteLock(kind, lock.id, stale, fence, false);
           }
         } catch (recoveryError) {
           // A failed or ambiguous recovery never grants permission to replace the lock.
-          if (recoveryError instanceof SkillSelectionError && recoveryError.code === "SESSION_LOCK_RECOVERY_INCOMPLETE") throw recoveryError;
+          if (recoveryError instanceof SkillSelectionError && recoveryError.code === `${kind.code}_LOCK_RECOVERY_INCOMPLETE`) throw recoveryError;
         }
-        try { acquired = publishSessionLock(lock.path, marker); break; }
+        try { acquired = publishWriteLock(kind, lock.path, marker); break; }
         catch (retryError) {
           if ((retryError as NodeJS.ErrnoException).code !== "EEXIST") throw retryError;
         }
@@ -731,11 +868,13 @@ function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheO
         // Symlinks, malformed ownership and unbound publication links remain
         // hard. A lock another writer is publishing or releasing that still
         // looks invalid after a few inspections counts as held (busy).
-        const held = inspectSessionLockSettled(lock.sessionId, options);
+        const held = inspectWriteLockSettled(kind, lock.id, options);
         const remaining = waitUntil - performance.now();
         if (remaining <= 0) {
-          if (!held) throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session lock changed during acquisition.");
-          throw new SkillSelectionError("SESSION_WRITE_BUSY", "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review.");
+          if (!held) throw new SkillSelectionError(`${kind.code}_WRITE_LOCK_CHANGED`, `The ${kind.noun} lock changed during acquisition.`);
+          throw new SkillSelectionError(`${kind.code}_WRITE_BUSY`, kind.code === "SESSION"
+            ? "Another Skills process owns a required session write lock; retry after it completes. A surviving legacy lock requires explicit recovery review."
+            : `Another Skills process owns the profile write lock ${lock.path}; retry after it completes. Inspect it read-only with skills profile-lock ${JSON.stringify(lock.id)} --json. It is safe to move aside only once the process it names (pid on host) has exited; a host-bound lock whose holder this host proves gone is moved automatically after 30 seconds.`);
         }
         // A lock released since the last attempt is retried at once; a held
         // or changing one after a short jittered pause, within the bounded wait.

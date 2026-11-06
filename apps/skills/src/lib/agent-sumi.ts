@@ -4,7 +4,6 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
-import { HOOK_REFUSAL_REASON_CODES } from "./hook-diagnostics.js";
 
 const SUMI_PATH_SELECTORS = ["SUMI_HOME", "SUMI_CONFIG_DIR", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"] as const;
 const SUMI_PATH_KEYS = ["data", "cache", "config", "state"] as const;
@@ -149,6 +148,29 @@ export function isManagedSumiPlugin(text: string | null, command: string, profil
     || text === renderSumiPluginVersion(command, profile, 1);
 }
 
+/**
+ * The refusal codes the v3 plugin names, frozen at its released bytes (0.10.93).
+ * isManagedSumiPlugin compares installed plugins byte for byte, so a code added
+ * to the hook boundary later must not change this list: that would make every
+ * installed v3 plugin unmanaged and refuse its repair. A code the adapter must
+ * name needs a v4 render and an upgrade from v3. A code outside this list
+ * still refuses; the adapter only omits its reason code.
+ */
+const SUMI_V3_REASON_CODES: readonly string[] = Object.freeze([
+  "SKILLS_API_CREDENTIAL_UNAVAILABLE", "SKILLS_API_UNAVAILABLE", "SKILLS_API_UNAUTHORIZED", "SKILLS_API_FORBIDDEN",
+  "SKILLS_API_RESOURCE_UNAVAILABLE", "SESSION_WRITE_BUSY", "SKILLS_CONTEXT_FAILED", "SKILLS_STORAGE_FULL",
+  "PROFILE_LOCK_MISMATCH", "PROFILE_IDENTITY_MISMATCH", "PROFILE_APPLIED_REPORT_FAILED", "CACHED_AUTHORITY_REQUIRED",
+  "CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING", "INVALID_CONTEXT_INPUT",
+  "CONTEXT_INPUT_TOO_LARGE", "INVALID_CONTEXT_BUDGET", "INVALID_SELECTION", "INVALID_SELECTION_ALIASES",
+  "INVALID_RECEIPT", "INVALID_CACHE_FILE", "UNSAFE_CACHE_PATH", "RECEIPT_TOO_LARGE", "BUNDLE_DIGEST_MISMATCH",
+  "BUNDLE_IDENTITY_MISMATCH", "BUNDLE_UNAVAILABLE", "BUNDLE_TOO_LARGE", "SKILL_NOT_SELECTED", "INVALID_SESSION",
+  "SESSION_PARENT_NOT_FOUND", "SESSION_PARENT_MISMATCH", "SESSION_NOT_FOUND", "SESSION_GENERATION_CHANGED",
+  "SESSION_GENERATION_EXHAUSTED", "SESSION_PARENT_CHANGED", "SESSION_RECEIPT_CHANGED",
+  "SESSION_RECONCILIATION_REQUIRED", "SESSION_RENEWAL_TIMEOUT", "SESSION_CONTEXT_CONFLICT",
+  "SESSION_RECONCILIATION_INCOMPLETE", "SESSION_WRITE_LOCKED", "SESSION_WRITE_LOCK_CHANGED",
+  "SESSION_LOCK_RECOVERY_INCOMPLETE", "SKILLS_HOOK_FAILED", "SKILLS_HOOK_TIMEOUT", "SKILLS_HOOK_INVALID_RESPONSE",
+]);
+
 function renderSumiPluginVersion(command: string, profile: string, version: 1 | 2 | 3): string {
   const legacy = version === 1;
   const failure = (message: string) => legacy ? `new Error(${JSON.stringify(message)})` : "refusal()";
@@ -162,7 +184,7 @@ ${legacy ? "" : `function refusal(${version === 3 ? "reasonCode" : ""}) {
   error.skillsHookRefusal = { version: 1, code: "SKILLS_HOOK_REFUSED"${version === 3 ? ", ...(reasonCode ? { reasonCode } : {})" : ""} };
   return error;
 }
-`}${version === 3 ? `const reasonCodes = new Set(${JSON.stringify(HOOK_REFUSAL_REASON_CODES)});
+`}${version === 3 ? `const reasonCodes = new Set(${JSON.stringify(SUMI_V3_REASON_CODES)});
 function refusedResult(result) {
   const reason = result.reason ?? result.stopReason ?? result.systemMessage;
   if (typeof reason !== "string" || reason.length > 16384) return refusal();
