@@ -16,12 +16,16 @@ import { INTEGRATION_AGENTS } from "./agent-adapters.js";
  *   record: its clock, its package version, its pid, ppid and uid, its start time,
  *   its host, its executable and, when it was started as one of the allowlisted
  *   Skills commands, that command and the allowlisted flag NAMES it was given.
- *   Nothing in it comes from a caller or from an environment variable.
+ *   Nothing in it comes from a caller or from an environment variable. The
+ *   invocation is the process's own arguments filtered through the allowlist: it
+ *   records what the process claimed to be running, not proof that it was Skills.
  * - `supplied` holds labels somebody else controls: an agent identifier and a
  *   parent session identifier read from the environment, and the app, command and
  *   version an SDK caller names for itself. Any process can set or forge them, so
  *   they are tracing aids for a human reading the record, never an identity, and
- *   the block says so (`authenticated: false`).
+ *   the block says so (`authenticated: false`). An environment label that looks
+ *   like a credential (a token prefix, a scheme separator, user:password@host) is
+ *   refused: only its name is recorded, in `rejected`.
  *
  * Nothing here records generic argv. A command is recorded only when it is a key
  * of MIGRATION_COMMANDS, a flag only when it is listed for that command, and a
@@ -84,6 +88,8 @@ export interface MigrationActorInput { app?: string; command?: string; version?:
 /** Mixed into the options of each of the three writers. */
 export interface MigrationActorOptions { actor?: MigrationActorInput }
 
+/** The process's own arguments filtered through the allowlist. It records what the process claimed to be running when it started, not proof that
+ * it was the Skills CLI: another program started with the same words would record the same thing. */
 export interface MigrationObservedInvocation {
   /** A key of MIGRATION_COMMANDS. */
   command: string;
@@ -108,7 +114,7 @@ export interface MigrationSupplied {
   authenticated: false;
   /** First set of SKILLS_AGENT_ID, HASNA_AGENT_ID, AGENT_ID, as publish provenance reads them. */
   agent?: { id: string; source: string };
-  /** The parent coding agent's session id when its documented environment variable is set. */
+  /** The parent coding agent's session id, read from CLAUDE_CODE_SESSION_ID when present. Caller-supplied, not authenticated. */
   parentSession?: { id: string; source: string };
   sdk?: { app: string; command?: string; version?: string };
   /** Names of supplied labels that were present and dropped (not their values). */
@@ -138,10 +144,28 @@ export function currentProcessProbe(): MigrationProcessProbe {
 }
 
 const AGENT_ENVIRONMENT = ["SKILLS_AGENT_ID", "HASNA_AGENT_ID", "AGENT_ID"] as const;
-/** Claude Code documents CLAUDE_CODE_SESSION_ID as the current session id in Bash tool, hook and stdio MCP subprocesses. */
+/** The parent session id is read from this variable when it is present. The value is whatever the environment holds: caller-supplied, not authenticated. */
 const SESSION_ENVIRONMENT = ["CLAUDE_CODE_SESSION_ID"] as const;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/;
-const SEMVER = /^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[0-9A-Za-z.]{1,32})?$/;
+/** Starts of common credential formats (GitHub, Stripe-style, Slack, AWS key ids, npm, GitLab, Google API keys, JWTs). A label that starts with one,
+ * or has one right after a separator, is refused. Case matters: AKIA, ASIA, AIza and eyJ are the exact spellings. */
+const CREDENTIAL_PREFIXES = [
+  "ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_", "sk-", "sk_live_", "sk_test_", "rk_live_", "rk_test_", "pk_live_",
+  "xox", "xapp-", "AKIA", "ASIA", "AIza", "npm_", "glpat-", "eyJ",
+] as const;
+const LABEL_SEPARATORS = ":@._-/";
+/** True for a value shaped like a credential or a credential-bearing address: a scheme separator, a user:password@host pair, or a known token prefix. */
+function looksLikeCredential(value: string): boolean {
+  if (value.includes("://") || (value.includes(":") && value.includes("@"))) return true;
+  for (let start = 0; start <= value.length; start += 1) {
+    if (start !== 0 && !LABEL_SEPARATORS.includes(value[start - 1]!)) continue;
+    if (CREDENTIAL_PREFIXES.some(prefix => value.startsWith(prefix, start))) return true;
+  }
+  return false;
+}
+/** A label worth recording: a short identifier that does not look like a credential. */
+const isLabel = (value: string): boolean => IDENTIFIER.test(value) && !looksLikeCredential(value);
+const SEMVER = /^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-(?:alpha|beta|rc|next|canary|dev)(?:\.\d{1,5})?)?$/;
 const bounded = (value: string, limit: number): string => value.length > limit ? value.slice(0, limit) : value;
 
 /** The allowlisted command and flags a process was started with, or undefined
@@ -202,7 +226,7 @@ function environmentLabel(env: MigrationProcessProbe["env"], names: readonly str
   for (const name of names) {
     const value = env[name];
     if (value === undefined) continue;
-    if (typeof value === "string" && IDENTIFIER.test(value)) return { id: value, source: name };
+    if (typeof value === "string" && isLabel(value)) return { id: value, source: name };
     rejected.push(field);
     return undefined;
   }

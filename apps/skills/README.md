@@ -3674,20 +3674,32 @@ values (`--agent`, `--kind`, `--platform`, `--codex-witness-version`,
 digest, a profile id, a stray positional argument or a flag that is not listed
 for that command leaves no trace; the record never holds the command line. An
 SDK process whose own command line is not one of these (Hooks, Mementos, a
-test) records no `invocation`.
+test) records no `invocation`. `invocation` is the process's own arguments
+filtered through that allowlist, so it records what the process claimed to be
+running when it started. It is not proof that the process was the Skills CLI: a
+different program started with the same words would record the same thing.
 
 `supplied` holds labels somebody else controls, so each is a tracing aid for a
 person reading the record and never an identity. `authenticated` is always
 `false`. `agent` is the first set of `SKILLS_AGENT_ID`, `HASNA_AGENT_ID` and
-`AGENT_ID`; `parentSession` is `CLAUDE_CODE_SESSION_ID`, which Claude Code sets to
-the current session id in its Bash tool, hook and stdio MCP subprocesses. Both
-are kept only when they are short identifiers (letters, digits and `_.:@-`, up to
-128 characters). `sdk` is what an embedding application passes as
+`AGENT_ID`; `parentSession` is read from `CLAUDE_CODE_SESSION_ID` when it is
+present. Both are caller-supplied: whatever the environment holds, not
+authenticated. Both are kept only when they are short identifiers (letters,
+digits and `_.:@-`, up to 128 characters) that do not look like a credential. A
+value containing `://`, containing both `:` and `@`, or starting (or having right
+after a separator) one of the common token prefixes (`ghp_`, `gho_`, `ghs_`,
+`ghu_`, `ghr_`, `github_pat_`, `sk-`, `sk_live_`, `sk_test_`, `rk_live_`,
+`rk_test_`, `pk_live_`, `xox`, `xapp-`, `AKIA`, `ASIA`, `AIza`, `npm_`, `glpat-`,
+`eyJ`) is dropped, and only the label name (`agent` or `parentSession`) goes to
+`rejected`, never the value. A credential with no recognisable shape cannot be
+told apart from an identifier, so do not put one in these variables. `sdk` is
+what an embedding application passes as
 `actor: { app, command, version }` to `applyAgentIntegration(plan, options)`,
 `archiveNativeSkills(inventory, options)` or `applyCodexPluginReconcile(plan,
 options)`. The app and command must be on the allowlist in the
 `MIGRATION_SDK_CALLERS` export (currently `hooks` and `mementos`) and the version
-must be `major.minor.patch` with an optional short suffix. A label that is
+must be `major.minor.patch` with an optional prerelease label (`alpha`, `beta`,
+`rc`, `next`, `canary` or `dev`, then optionally `.` and a number). A label that is
 missing from the lists or malformed is dropped, never recorded, and its name is
 listed in `rejected`; a label never fails a migration and can never replace an
 `observed` field. A new embedding application is added to the list in a Skills

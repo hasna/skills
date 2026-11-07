@@ -88,7 +88,8 @@ export function readMigrationRecord(text: string): unknown {
  * comparing a new record against the frozen old one from the same scenario. */
 export function recordShape(text: string, homes: readonly string[] = []): unknown {
   let normalized = text;
-  for (const home of homes) normalized = normalized.split(home).join("/home/fixture");
+  // The longer spelling first: a temp root that is a symlink (/var/folders -> /private/var/folders) has a real path that contains the lexical one.
+  for (const home of [...homes].sort((a, b) => b.length - a.length)) normalized = normalized.split(home).join("/home/fixture");
   const mask = (value: unknown): unknown => typeof value === "string"
     ? value.replace(/[0-9a-f]{64}/g, "<sha256>").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>").replace(/\b(\d+)-[0-9a-f]{12}\b/g, "$1-<h12>")
     : Array.isArray(value) ? value.map(mask)

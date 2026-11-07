@@ -79,7 +79,7 @@ test("supplied.agent is the first set of the three agent variables and names its
   expect(buildMigrationActor(undefined, probe()).supplied.agent).toBeUndefined();
 });
 
-test("supplied.parentSession is the documented Claude Code session variable", () => {
+test("supplied.parentSession is read from CLAUDE_CODE_SESSION_ID when it is present", () => {
   const session = "0f1e2d3c-4b5a-4968-8776-655443322110";
   expect(buildMigrationActor(undefined, probe({ env: { CLAUDE_CODE_SESSION_ID: session } })).supplied.parentSession).toEqual({ id: session, source: "CLAUDE_CODE_SESSION_ID" });
   expect(buildMigrationActor(undefined, probe({ env: { CODEX_THREAD_ID: session, SESSION_ID: session } })).supplied.parentSession).toBeUndefined();
@@ -228,5 +228,91 @@ test("the allowlist classifies every option of each listed command exactly as th
       const takesValue = option.required || option.optional, rule = rules[option.long!]!;
       expect([path, option.long, takesValue ? "value" : "switch"]).toEqual([path, option.long, rule.kind === "switch" ? "switch" : "value"]);
     }
+  }
+});
+
+// ---- credential-shaped environment labels -----------------------------------
+// Invented values only, assembled from pieces so that no source line holds a whole credential-shaped string.
+const OLD_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/; // every refused value below used to satisfy this shape alone
+const TAIL = "FIXTUREVALUE0123456789";
+const CREDENTIAL_PREFIXES = ["ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_", "sk-", "sk_live_", "sk_test_", "rk_live_", "rk_test_", "pk_live_", "xox", "xapp-", "AKIA", "ASIA", "AIza", "npm_", "glpat-", "eyJ"];
+const LABEL_VARIABLES = [["SKILLS_AGENT_ID", "agent"], ["HASNA_AGENT_ID", "agent"], ["AGENT_ID", "agent"], ["CLAUDE_CODE_SESSION_ID", "parentSession"]] as const;
+const withLabel = (variable: string, value: string) => buildMigrationActor(undefined, probe({ env: { [variable]: value } }));
+
+for (const prefix of CREDENTIAL_PREFIXES) test(`a value that starts with ${prefix} is refused as an agent id and as a session id, by name only`, () => {
+  const value = [prefix, TAIL].join("");
+  expect(OLD_IDENTIFIER.test(value)).toBe(true);
+  for (const [variable, label] of LABEL_VARIABLES) {
+    const actor = withLabel(variable, value);
+    expect(actor.supplied).toEqual({ authenticated: false, rejected: [label] });
+    expect(JSON.stringify(actor)).not.toContain(TAIL);
+  }
+});
+
+test("a credential-shaped part after a separator is refused too", () => {
+  for (const prefix of CREDENTIAL_PREFIXES) {
+    const value = ["fixture-agent-", prefix, TAIL].join("");
+    expect(OLD_IDENTIFIER.test(value)).toBe(true);
+    expect(withLabel("SKILLS_AGENT_ID", value).supplied).toEqual({ authenticated: false, rejected: ["agent"] });
+  }
+  for (const separator of [":", "@", ".", "_", "-"]) {
+    const value = ["fixture", separator, "ghp_", TAIL].join("");
+    expect(OLD_IDENTIFIER.test(value)).toBe(true);
+    expect(withLabel("CLAUDE_CODE_SESSION_ID", value).supplied).toEqual({ authenticated: false, rejected: ["parentSession"] });
+  }
+});
+
+test("a JWT-shaped, AWS-key-shaped or Stripe-shaped value is refused", () => {
+  const shapes = [
+    ["eyJ", "FIXTUREHEADER", ".", "FIXTUREPAYLOAD", ".", "FIXTURESIGNATURE"], ["AKIA", "FIXTUREVALUE0123"], ["ASIA", "FIXTUREVALUE0123"],
+    ["sk_live_", TAIL], ["rk_live_", TAIL], ["xoxb", "-", "0000000000", "-", TAIL], ["github_pat_", TAIL, "_", TAIL], ["glpat-", TAIL], ["npm_", TAIL],
+  ].map(parts => parts.join(""));
+  for (const value of shapes) {
+    const actor = withLabel("SKILLS_AGENT_ID", value);
+    expect(actor.supplied).toEqual({ authenticated: false, rejected: ["agent"] });
+    expect(JSON.stringify(actor)).not.toContain(value.slice(4));
+  }
+});
+
+test("a user:password@host pair or an address with a scheme is refused, whatever it is called", () => {
+  const forms = [
+    ["fixture-user", ":", "fixture-pw", "@", "host.example"], ["a", ":", "b", "@", "c"], ["fixture-user", ":", "fixture-pw", "@", "host.example", ":", "5432"],
+    ["https", "://", "host.example"], ["postgres", "://", "fixture-user", ":", "fixture-pw", "@", "host.example", "/db"], ["fixture", "://", "x"],
+  ].map(parts => parts.join(""));
+  for (const value of forms) for (const [variable, label] of LABEL_VARIABLES) {
+    const actor = withLabel(variable, value);
+    expect(actor.supplied).toEqual({ authenticated: false, rejected: [label] });
+    expect(JSON.stringify(actor)).not.toContain("fixture-pw");
+  }
+  // Either character alone is an ordinary identifier.
+  expect(withLabel("SKILLS_AGENT_ID", "agent@fixture.example").supplied.agent).toEqual({ id: "agent@fixture.example", source: "SKILLS_AGENT_ID" });
+  expect(withLabel("SKILLS_AGENT_ID", "fixture-host:8080").supplied.agent).toEqual({ id: "fixture-host:8080", source: "SKILLS_AGENT_ID" });
+});
+
+const REAL_IDS = [
+  ["claude-", "0123456789abcdef0123456789abcdef"], ["codex-", "fedcba9876543210fedcba9876543210"], ["0f1e2d3c-4b5a-4968-8776-655443322110"], ["7b0d8a52-91c4-4e6f-a3b8-5c2d1e9f0a47"],
+  ["oid_Ab12cd"], ["agent-fixture-0a1b2c3d4e5f"],
+  // Near misses that are not credentials: a prefix inside a word, a lower-case spelling, a different separator.
+  ["disk-2"], ["task-17"], ["mask-agent"], ["skills-agent"], ["ghost-agent"], ["ghp-agent"], ["sk_agent"], ["npm-agent"], ["xylophone-agent"], ["asia-pacific-agent-01"], ["akia-lowercase-agent"], ["aiza-lowercase-agent"], ["eyes-agent"],
+].map(parts => parts.join(""));
+
+test("real agent ids and session ids still pass: claude and codex ids, UUIDs, and names with prefix-like words", () => {
+  for (const value of REAL_IDS) for (const [variable, label] of LABEL_VARIABLES) {
+    const supplied = withLabel(variable, value).supplied;
+    expect(supplied[label]).toEqual({ id: value, source: variable });
+    expect(supplied.rejected).toBeUndefined();
+  }
+});
+
+test("a credential-shaped first agent variable is refused without falling through to the next", () => {
+  const actor = buildMigrationActor(undefined, probe({ env: { SKILLS_AGENT_ID: ["sk-", TAIL].join(""), HASNA_AGENT_ID: "agent-valid", CLAUDE_CODE_SESSION_ID: ["ghs_", TAIL].join("") } }));
+  expect(actor.supplied).toEqual({ authenticated: false, rejected: ["agent", "parentSession"] });
+  expect(JSON.stringify(actor)).not.toContain("agent-valid");
+});
+
+test("an SDK version carries only a numeric triple and an optional short prerelease label", () => {
+  for (const version of ["1.2.3", "1.2.3-rc.1", "1.2.3-beta", "1.2.3-canary.12", "10.20.30-alpha.5", "0.0.0-dev"]) expect(buildMigrationActor({ app: "hooks", version }, probe()).supplied.sdk).toEqual({ app: "hooks", version });
+  for (const version of [`1.2.3-${TAIL}`, "1.2.3-rc.1.2", "1.2.3-gh", "1.2.3-rc.", "1.2.3-RC.1", "1.2.3-ghp.FIXTURE"]) {
+    expect(buildMigrationActor({ app: "hooks", version }, probe()).supplied).toEqual({ authenticated: false, sdk: { app: "hooks" }, rejected: ["sdk.version"] });
   }
 });

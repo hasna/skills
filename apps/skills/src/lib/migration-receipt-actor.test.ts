@@ -141,3 +141,22 @@ test("a migration directory holding old and new records lists and parses as one 
   expect(views).toHaveLength(2);
   expect(views.every(view => (view as { kind: string }).kind === "receipt")).toBe(true);
 });
+
+test("a credential-shaped environment label never reaches either record", () => {
+  const agent = ["sk_live_", "FIXTUREVALUE0123456789"].join(""), session = ["fixture-user", ":", "fixture-pw", "@", "host.example"].join("");
+  const environment = { SKILLS_AGENT_ID: agent, HASNA_AGENT_ID: undefined, AGENT_ID: undefined, CLAUDE_CODE_SESSION_ID: session };
+  const s = station();
+  const receipt = withEnvironment(environment, () => install(s, "synthetic")), journal = withEnvironment(environment, () => archive(s, { dataDir: s.dataDir, includeUnmanaged: true }));
+  for (const text of [receipt, journal]) {
+    expect(JSON.parse(text).actor.supplied).toEqual({ authenticated: false, rejected: ["agent", "parentSession"] });
+    for (const value of [agent, session, "FIXTUREVALUE", "fixture-pw"]) expect(text).not.toContain(value);
+  }
+});
+
+test("recordShape normalises a symlinked temp root whichever spelling comes first", () => {
+  // macOS: /var is a link to /private/var, so a real path contains the lexical one.
+  const lexical = "/var/folders/ab/T/home", real = "/private/var/folders/ab/T/home";
+  for (const homes of [[lexical, real], [real, lexical]]) {
+    expect(recordShape(JSON.stringify({ path: `${real}/.claude`, other: `${lexical}/.hasna` }), homes)).toEqual({ path: "/home/fixture/.claude", other: "/home/fixture/.hasna" });
+  }
+});
