@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { fstatSync } from "node:fs";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "./server.js";
@@ -8,6 +9,24 @@ export const MCP_HTTP_SERVICE_NAME = "skills";
 
 export function isMcpHttpMode(argv: string[] = process.argv.slice(2)): boolean {
   return argv.includes("--http") || process.env.MCP_HTTP === "1";
+}
+
+/** Whether standard input is a pipe or socket, which is how an agent host
+ * (Claude Code, Codex) connects a stdio MCP server. A terminal, /dev/null under
+ * a service manager, or a regular file is none of these. */
+export function stdinIsPipeOrSocket(): boolean {
+  try { const stat = fstatSync(0); return stat.isFIFO() || stat.isSocket(); } catch { return false; }
+}
+
+/** The transport to serve. An explicit choice keeps its meaning: `--stdio` or
+ * MCP_STDIO=1 serves stdio, and `--http`, `--port` or MCP_HTTP=1 serves HTTP.
+ * With none of them, an agent host's pipe gets stdio, because a host entry
+ * registered as plain `skills-mcp` would otherwise wait forever for a reply
+ * from an HTTP server; anything else keeps the shared HTTP default. */
+export function selectMcpTransport(argv: string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env, stdinIsPipe: boolean = stdinIsPipeOrSocket()): "stdio" | "http" {
+  if (argv.includes("--stdio") || env.MCP_STDIO === "1") return "stdio";
+  if (argv.includes("--http") || argv.includes("--port") || env.MCP_HTTP === "1") return "http";
+  return stdinIsPipe ? "stdio" : "http";
 }
 
 export function isMcpStdioMode(argv: string[] = process.argv.slice(2)): boolean {
