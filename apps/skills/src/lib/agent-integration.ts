@@ -1,4 +1,5 @@
 import { isVerifiedOpenCodeSkillDescriptor } from "./opencode-hook-protocol.js";
+import { migrationActorReceipt, type MigrationActorOptions } from "./migration-actor.js";
 import { upgradeSumiSettingsWitness, readSumiSettingsPreimage, SUMI_DISCOVERY_PROJECTION_FIELDS } from "./sumi-settings-witness.js";
 import { codexAdmissionReceipt, codexCorpusRootForPath, withCodexCorpusWrite, withCodexCorpusWriteAsync, type CodexAdmissionReceipt, type CodexCorpusAdmission, type CodexCorpusWriteOptions } from "./codex-corpus-write.js";
 import { connectCodexHookRpc, type CodexHookRpc } from "./codex-hook-rpc.js";
@@ -1742,7 +1743,7 @@ export function planCodexPluginNameReconcile(request: CodexPluginReconcileReques
   return { plan, report: result };
 }
 
-export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
+export function applyAgentIntegration(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions & MigrationActorOptions = {}): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
   // A Codex name reconcile writes config.toml only through Codex's own
   // versioned writer; never through this file writer.
   if (plan.codexReconcile) throw new Error("CODEX_RECONCILE_NATIVE_WRITER_REQUIRED: a Codex name reconcile is applied only with applyCodexPluginReconcile, through Codex's versioned config writer");
@@ -1874,7 +1875,7 @@ function assertReconciledPluginCapabilities(plan: AgentIntegrationPlan, aliases:
   if (refusals.length) throw new CodexPluginReconcileRefusal(CODEX_PLUGIN_CAPABILITY_REVIEW_REQUIRED, `enrolled Codex plugins changed while the reconcile was writing: ${detail}; the writes are compensated`, refusals);
 }
 
-function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
+function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: CodexCorpusWriteOptions & MigrationActorOptions = {}, assertCurrent: () => void, admission?: CodexCorpusAdmission): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } & CodexAdmissionReceipt {
   const fallback = codexAdmissionReceipt(admission);
   const { aliases, currentText } = verifyIntegrationPlanBeforeWrite(plan, assertCurrent);
   const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [], written: AgentConfigChange[] = [], createdDirectories = new Set<string>();
@@ -1909,7 +1910,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
     }
     assertCurrent(); recheckRootAliases(aliases);
     verifyIntegrationPlanAfterWrite(plan, aliases);
-    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.codexReconcile ? { codexReconcile: { codexVersion: plan.codexReconcile.request.catalog.version, enrolled: plan.codexReconcile.names } } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
+    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(plan.cacheWitnessUpgrade ? { cacheWitnessUpgrade: plan.cacheWitnessUpgrade } : {}), ...(plan.codexReconcile ? { codexReconcile: { codexVersion: plan.codexReconcile.request.catalog.version, enrolled: plan.codexReconcile.names } } : {}), ...(plan.retainedReviewArtifacts?.length ? { retainedReviewArtifacts: plan.retainedReviewArtifacts.map(item => ({ path: item.path, ...item.artifact })) } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback, ...migrationActorReceipt(options.actor) }) + "\n");
   } catch (error) {
     assertCurrent();
     for (const change of written.reverse()) {
@@ -1931,7 +1932,7 @@ function applyAgentIntegrationUnlocked(plan: AgentIntegrationPlan, options: Code
   return { changed: plan.changes.map(change => change.path), backups, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
 }
 
-export interface CodexReconcileApplyOptions extends CodexCorpusWriteOptions {
+export interface CodexReconcileApplyOptions extends CodexCorpusWriteOptions, MigrationActorOptions {
   /** The Codex home the owned app-server uses; omit for the default ~/.codex. */
   codexHome?: string;
   /** Test seam for the owned Codex app-server; production starts `codex app-server`. */
@@ -2047,7 +2048,7 @@ async function applyCodexPluginReconcileUnlocked(plan: AgentIntegrationPlan, opt
     atomicWrite(receipt, JSON.stringify({ version: 1, changes: [
       ...(configChange ? [{ path: configChange.path, beforeHash: configChange.before === null ? null : sha(configChange.before), afterHash: configAfter === null ? null : sha(configAfter), writer: "codex:config/batchWrite", nativeConfigVersion: nativeVersion }] : []),
       ...(policyChange ? [{ path: policyChange.path, beforeHash: policyChange.before === null ? null : sha(policyChange.before), afterHash: sha(policyChange.after), writer: "skills" }] : []),
-    ], backups, codexReconcile: { codexVersion: reconcile.request.catalog.version, enrolled: reconcile.names }, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback }) + "\n");
+    ], backups, codexReconcile: { codexVersion: reconcile.request.catalog.version, enrolled: reconcile.names }, ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback, ...migrationActorReceipt(options.actor) }) + "\n");
     return { changed: plan.changes.map(change => change.path), backups, receipt, ...(nativeVersion ? { nativeConfigVersion: nativeVersion } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
   } catch (error) {
     let incomplete: string | undefined;
@@ -2101,7 +2102,7 @@ function writeArchiveJournal(path: string, value: unknown): void {
   }
 }
 
-export function archiveNativeSkills(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
+export function archiveNativeSkills(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & MigrationActorOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
   const selected = options.targetManifest ? selectNativeMigrationTargets(inventory, options.targetManifest)
     : inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   const roots = selected.flatMap(entry => {
@@ -2116,7 +2117,7 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: Code
   return withCodexCorpusWrite(roots, (assertCurrent, admission) => archiveNativeSkillsUnlocked(inventory, options, assertCurrent, admission), options);
 }
 
-function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }, assertCurrent: () => void, admission?: CodexCorpusAdmission): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
+function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & MigrationActorOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }, assertCurrent: () => void, admission?: CodexCorpusAdmission): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
   const fallback = codexAdmissionReceipt(admission);
   const aliases = [...new Map(inventory.filter(entry => entry.rootAlias).map(entry => [entry.rootAlias!.alias, entry.rootAlias!])).values()];
   if (aliases.length && !options.allowRootAliases) throw new Error("Native migration requires explicit allowRootAliases for agent root aliases");
@@ -2142,7 +2143,8 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
     hash: entry.vendor ? sha(readNativeBytes(join(entry.path, "SKILL.md"))) : entry.hash,
     ...(entry.vendor ? { discoveryOnly: true } : {}), status: "planned",
   }));
-  const journal = { version: 2, operationId, status: "planned", entries, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
+  // The actor is measured once, when the operation starts, and every rewrite of the journal carries the same block.
+  const journal = { version: 2, operationId, status: "planned", entries, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback, ...migrationActorReceipt(options.actor) };
   const moved: Move[] = [];
   const verifyArchive = (entry: Move): void => {
     assertSafePath(entry.archive);

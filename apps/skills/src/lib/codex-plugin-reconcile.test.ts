@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import type { CodexHookRpc } from "./codex-hook-rpc.js";
 import { captureCodexSettingsV3 } from "./codex-settings-witness.js";
+import { expectMeasuredActor, frozenRecord, readMigrationRecord, thisProcess } from "./migration-actor.fixture.js";
 import { captureDiscoveryByteSources, captureDiscoveryDirectories, rebaseCodexEnrolledCacheWitnesses } from "./agent-discovery.js";
 import { CODEX_CAPABILITY_PATH_MUTATIONS, CODEX_INERT_NESTED_NAMES } from "./codex-plugin-capability-paths.fixture.js";
 import { codexPluginCapabilityChanges, codexPluginRootEvidence, enrolledCodexPluginStrictChanges, unenrolledCodexPluginEvidence } from "./codex-plugin-skill-controls.js";
@@ -859,6 +860,7 @@ test("K34: a binding that uses the semantic cache witness refuses with its own c
 test("A2: the deny rows go through Codex's versioned writer, and the policy follows only after the config readback", async () => {
   const station = enrolledStation(), root = refresh(station, "1.1.0", BUMPED), configBefore = readFileSync(station.config, "utf8"), policyBefore = readFileSync(station.policy, "utf8");
   const planned = planCodexPluginNameReconcile({ ...station.options, catalog: { ...newNames(station, root), remoteReceipts: captureCodexRemoteReceiptSnapshot(station.cache) } }).plan!.changes.find(change => change.path === station.config)!.after;
+  const appliedFrom = Date.now();
   const result = await station.run(true, newNames(station, root));
   expect(result).toMatchObject({ outcome: "applied", enrolled: NEW });
   const configAfter = readFileSync(station.config, "utf8");
@@ -876,6 +878,11 @@ test("A2: the deny rows go through Codex's versioned writer, and the policy foll
     { path: station.config, beforeHash: sha256(configBefore), afterHash: sha256(configAfter), writer: "codex:config/batchWrite", nativeConfigVersion: `sha256:${sha256(configAfter)}` },
     { path: station.policy, beforeHash: sha256(policyBefore), afterHash: sha256(readFileSync(station.policy, "utf8")), writer: "skills" },
   ]);
+  // The receipt names its writer: what this process measured, nothing the caller said, and no other key added to version 1.
+  expectMeasuredActor(receipt.actor, thisProcess(), { from: appliedFrom, to: Date.now() });
+  expect(receipt.version).toBe(1);
+  expect(Object.keys(receipt).filter(key => key !== "actor")).toEqual(Object.keys(JSON.parse(frozenRecord("codex-reconcile"))));
+  expect(readMigrationRecord(readFileSync(result.receipt!, "utf8"))).toMatchObject({ kind: "receipt", codexReconcile: { codexVersion: expect.any(String) } });
   expect(blocks(station, false)).toBe(false);
 });
 

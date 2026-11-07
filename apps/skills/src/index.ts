@@ -522,6 +522,8 @@ export { syncSelectionProfile } from "./lib/selection-resolver.js";
 export { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput, type SessionReconciliationOptions } from "./lib/session-reconciliation.js";
 export { planAgentIntegration, planClaudeStopHookUpdate, planClaudePreToolUseHookUpdate, planClaudeHookEventsUpdate, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
 export type { ClaudeManagedHookProjection, ClaudeManagedHookProjectionOptions } from "./lib/agent-integration.js";
+export { MIGRATION_ACTOR_SCHEMA, MIGRATION_SDK_CALLERS } from "./lib/migration-actor.js";
+export type { MigrationActor, MigrationActorInput, MigrationActorOptions, MigrationObserved, MigrationObservedInvocation, MigrationSupplied } from "./lib/migration-actor.js";
 export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, captureDiscoveryExecutableSources, DISCOVERY_ROOT_UNRESOLVED, isDiscoveryRootUnresolved, type DiscoveryDirectory, type DiscoveryExecutable, type DiscoverySource } from "./lib/agent-discovery.js";
 export { captureClaudeMarketplaceRegistry, captureClaudeMarketplaceRegistryV2 } from "./lib/claude-marketplace-registry.js";
 export { captureClaudeMarketplaceEntry, hashClaudeMarketplaceEntry, CLAUDE_MARKETPLACE_ENTRY_HASH_MODE, type ClaudeMarketplaceEntrySelector, type ClaudeMarketplaceEntryWitness } from "./lib/claude-marketplace-entry-witness.js";
