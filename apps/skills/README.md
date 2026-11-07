@@ -3687,10 +3687,10 @@ present. Both are caller-supplied: whatever the environment holds, not
 authenticated. Both are kept only when they are short identifiers (letters,
 digits and `_.:@-`, up to 128 characters) that do not look like a credential. A
 value containing `://`, containing both `:` and `@`, or starting (or having right
-after a separator) one of the common token prefixes (`ghp_`, `gho_`, `ghs_`,
-`ghu_`, `ghr_`, `github_pat_`, `sk-`, `sk_live_`, `sk_test_`, `rk_live_`,
-`rk_test_`, `pk_live_`, `xox`, `xapp-`, `AKIA`, `ASIA`, `AIza`, `npm_`, `glpat-`,
-`eyJ`) is dropped, and only the label name (`agent` or `parentSession`) goes to
+after a separator) the prefix of a known credential format (the prefixes of
+GitHub, Stripe-style, Slack, AWS access key, npm, GitLab, Google API key and JSON
+Web Token credentials) is dropped, and only the label name (`agent` or
+`parentSession`) goes to
 `rejected`, never the value. A credential with no recognisable shape cannot be
 told apart from an identifier, so do not put one in these variables. `sdk` is
 what an embedding application passes as
