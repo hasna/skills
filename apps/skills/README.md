@@ -3629,6 +3629,87 @@ refuses native discovery or unknown control changes, and changes policy only.
 After explicit migration, ordinary supported local MCP updates require no
 coordinated policy write.
 
+### Migration records name the process that wrote them
+
+Each record Skills writes under `<skills-data>/migration/<uuid>/` carries an
+`actor` block saying which process wrote it: the integration receipt
+(`skills hook install`, `rebind-settings`, `rebind-cache`,
+`retain-review-artifact` and `trust-native`, with `--apply`), the Codex
+reconcile receipt (`hook codex-reconcile --apply`) and the native archive
+journal (`migrate native --apply`). The block is additive. The receipts stay
+version 1 and the journal stays version 2, no existing key changes, and a
+reader that knows only the earlier keys parses old and new records alike. A
+record written by an earlier release has no `actor`, which says nothing about
+who wrote it.
+
+```json
+"actor": {
+  "schema": "hasna.skills-migration-actor.v1",
+  "observed": {
+    "writtenAt": "2026-11-07T12:00:00.000Z", "cliVersion": "0.10.95", "pid": 4242, "ppid": 4141, "uid": 501,
+    "processStartedAt": "2026-11-07T11:59:47.500Z", "hostname": "host.example", "execPath": "/home/user/.bun/bin/bun",
+    "invocation": { "command": "hook install", "flags": ["--agent", "--apply", "--discovery-inputs"], "flagValues": { "--agent": "claude" } }
+  },
+  "supplied": {
+    "authenticated": false,
+    "agent": { "id": "agent-id", "source": "SKILLS_AGENT_ID" },
+    "parentSession": { "id": "session-id", "source": "CLAUDE_CODE_SESSION_ID" },
+    "sdk": { "app": "hooks", "command": "install", "version": "0.4.2" },
+    "rejected": ["sdk.command"]
+  }
+}
+```
+
+The two halves are never mixed. `observed` is what the writing process measured
+about itself when it wrote the record: its clock (`writtenAt`), the package
+version it runs (`cliVersion`), its process id, parent process id and user id,
+the start time computed from its uptime, its host name and its executable.
+Nothing in it comes from a caller or an environment variable. A field the
+process cannot measure (a user id on a system without one) is left out rather
+than guessed. `observed.invocation` appears only when the process was started
+as one of the commands above. It holds the command and the names of its flags,
+sorted, and the value of a flag only when the flag takes one of a fixed set of
+values (`--agent`, `--kind`, `--platform`, `--codex-witness-version`,
+`--claude-witness-version`) and the value is exactly one of them. A path, a
+digest, a profile id, a stray positional argument or a flag that is not listed
+for that command leaves no trace; the record never holds the command line. An
+SDK process whose own command line is not one of these (Hooks, Mementos, a
+test) records no `invocation`. `invocation` is the process's own arguments
+filtered through that allowlist, so it records what the process claimed to be
+running when it started. It is not proof that the process was the Skills CLI: a
+different program started with the same words would record the same thing.
+
+`supplied` holds labels somebody else controls, so each is a tracing aid for a
+person reading the record and never an identity. `authenticated` is always
+`false`. `agent` is the first set of `SKILLS_AGENT_ID`, `HASNA_AGENT_ID` and
+`AGENT_ID`; `parentSession` is read from `CLAUDE_CODE_SESSION_ID` when it is
+present. Both are caller-supplied: whatever the environment holds, not
+authenticated. Both are kept only when they are short identifiers (letters,
+digits and `_.:@-`, up to 128 characters) that do not look like a credential. A
+value containing `://`, containing both `:` and `@`, or starting (or having right
+after a separator) the prefix of a known credential format (the prefixes of
+GitHub, Stripe-style, Slack, AWS access key, npm, GitLab, Google API key and JSON
+Web Token credentials) is dropped, and only the label name (`agent` or
+`parentSession`) goes to
+`rejected`, never the value. A credential with no recognisable shape cannot be
+told apart from an identifier, so do not put one in these variables. `sdk` is
+what an embedding application passes as
+`actor: { app, command, version }` to `applyAgentIntegration(plan, options)`,
+`archiveNativeSkills(inventory, options)` or `applyCodexPluginReconcile(plan,
+options)`. The app and command must be on the allowlist in the
+`MIGRATION_SDK_CALLERS` export (currently `hooks` and `mementos`) and the version
+must be `major.minor.patch` with an optional prerelease label (`alpha`, `beta`,
+`rc`, `next`, `canary` or `dev`, then optionally `.` and a number). A label that is
+missing from the lists or malformed is dropped, never recorded, and its name is
+listed in `rejected`; a label never fails a migration and can never replace an
+`observed` field. A new embedding application is added to the list in a Skills
+release.
+
+To see who ran a migration: `jq .actor <skills-data>/migration/<uuid>/receipt.json`
+(the archive journal is `<uuid>/native/receipt.json`). Compare `observed.pid`,
+`ppid`, `hostname` and `processStartedAt` with the process table and shell
+history on that host before trusting `supplied`.
+
 ### Native discovery drift is reported, not blocking
 
 Live prompt, session, subagent and tool hooks no longer block on
