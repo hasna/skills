@@ -24,6 +24,7 @@ import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettings
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7, captureCodexSettingsV8 } from "../../lib/codex-settings-witness.js";
 import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
 import { getDataDirReadOnly } from "../../lib/config.js";
+import { readManagedSkillPolicySnapshot } from "../../lib/managed-policy.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
 import { captureClaudeMarketplaceEntry } from "../../lib/claude-marketplace-entry-witness.js";
 import { reviewClaudeProspectiveCandidate, type ClaudeProspectiveReviewRequest } from "../../lib/claude-prospective-review.js";
@@ -476,16 +477,17 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--codex-native-catalog <file>", "Reviewed supported Codex skill and installed-plugin receipt for exact qualified-name disables")
     .option("--reviewed-cache-alias <path>", "Exact skill-containing vendor cache alias reviewed for this hook plan")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
+    .option("--review-cua-driver-skill", "Review and record the current exact Cua driver skill copy as the supported Claude native allowance", false)
     .option("--apply", "Apply the plan, preserving prior configuration in private backups", false)
     .option("--json", "Output a receipt as JSON", false)
     .description("Plan or install one Skills CLI bridge plus native prompt hooks")
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const plan = planAgentIntegration({ projectDir: process.cwd(), agents: options.agent === undefined ? detectedIntegrationAgents() : agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, codexSkillDenials: options.codexSkillDenials ? JSON.parse(readFileSync(options.codexSkillDenials,"utf8")) : undefined, codexNativeCatalog: options.codexNativeCatalog ? JSON.parse(readFileSync(options.codexNativeCatalog, "utf8")) : undefined });
+        const plan = planAgentIntegration({ projectDir: process.cwd(), agents: options.agent === undefined ? detectedIntegrationAgents() : agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, reviewCuaDriverSkill: options.reviewCuaDriverSkill, codexSkillDenials: options.codexSkillDenials ? JSON.parse(readFileSync(options.codexSkillDenials,"utf8")) : undefined, codexNativeCatalog: options.codexNativeCatalog ? JSON.parse(readFileSync(options.codexNativeCatalog, "utf8")) : undefined });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
-        const receipt = { codexPluginSkillReview: plan.codexPluginSkillReview, codexPluginSkills: plan.changes.filter(change=>change.path.endsWith("agent-policy.json")).map(change=>JSON.parse(change.after).bridge?.codexPluginSkills ?? []).flat(), applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };
+        const receipt = { codexPluginSkillReview: plan.codexPluginSkillReview, codexPluginSkills: plan.changes.filter(change=>change.path.endsWith("agent-policy.json")).map(change=>JSON.parse(change.after).bridge?.codexPluginSkills ?? []).flat(), applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkillAllowances: plan.nativeSkillAllowances ?? [], nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true, allowed: entry.allowed ?? null })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system && !entry.allowed) };
         if (options.json) await writeCliOutput(JSON.stringify(receipt));
         else await writeCliOutput(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
@@ -757,11 +759,19 @@ export function registerAgentIntegration(parent: Command): void {
         const targetManifest = options.targetManifest ? readNativeMigrationTargetManifest(options.targetManifest) : undefined;
         if (options.apply && options.reviewedCacheAlias && !targetManifest) throw new Error("Applying a reviewed cache alias requires an exact --target-manifest");
         const includeVendor = options.includeVendor || Boolean(targetManifest?.targets.some(target => target.vendor));
-        const inventory = inventoryNativeSkills(undefined, { projectDirs: [process.cwd(), ...(options.project ? [options.project] : [])], agents: options.agent ? [options.agent as IntegrationAgent] : undefined, includeVendor, configured: includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias });
+        // An unreadable policy grants no allowance; the copy stays an ordinary
+        // unmanaged inventory row rather than being silently adopted.
+        let nativeSkillAllowances: unknown[] | undefined;
+        try {
+          const recorded = readManagedSkillPolicySnapshot()?.value?.bridge?.nativeSkillAllowances;
+          nativeSkillAllowances = Array.isArray(recorded) ? recorded : undefined;
+        } catch { nativeSkillAllowances = undefined; }
+        const inventory = inventoryNativeSkills(undefined, { projectDirs: [process.cwd(), ...(options.project ? [options.project] : [])], agents: options.agent ? [options.agent as IntegrationAgent] : undefined, includeVendor, configured: includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, nativeSkillAllowances });
         if (targetManifest) selectNativeMigrationTargets(inventory, targetManifest);
         const result = options.apply ? archiveNativeSkills(inventory, { includeUnmanaged: options.includeUnmanaged, includeVendor: options.includeVendor, allowRootAliases: options.allowRootAliases, targetManifest }) : { entries: [], ...(targetManifest ? { targetManifest: { schema: targetManifest.schema, digest: targetManifest.digest, targetCount: targetManifest.targets.length } } : {}) };
-        if (options.json) await writeCliOutput(JSON.stringify({ applied: options.apply, inventory, ...result }));
-        else await writeCliOutput(`${inventory.length} native skill(s) found; ${result.entries.length} archived with recovery receipts.${options.apply ? "" : " Use --apply to archive managed copies."}`);
+        const allowances = inventory.flatMap(entry => entry.allowed ? [{ id: entry.allowed.id, agent: entry.agent, path: entry.path, treeSha256: entry.allowed.treeSha256 }] : []);
+        if (options.json) await writeCliOutput(JSON.stringify({ applied: options.apply, inventory, ...(allowances.length ? { nativeSkillAllowances: allowances } : {}), ...result }));
+        else await writeCliOutput(`${inventory.length} native skill(s) found; ${allowances.length ? `${allowances.length} allowed by the Cua driver allowance; ` : ""}${result.entries.length} archived with recovery receipts.${options.apply ? "" : " Use --apply to archive managed copies."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 }

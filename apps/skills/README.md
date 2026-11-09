@@ -170,6 +170,20 @@ skills inherited from a parent workspace. Preview the JSON inventory before
 applying it; archived copies retain recovery receipts. A drift refusal reports
 the affected paths without printing their skill documents.
 
+The one supported native skill exception is the Cua Driver skill the Cua app
+installs at `~/.claude/skills/cua-driver`. Claude hook installation accepts it
+when it is the exact canonical directory, a link-free tree, byte-identical to
+the Cua app's own target at `~/.cua-driver/skills/cua-driver`, and its
+`SKILL.md` declares the `cua-driver` name. The plan and JSON receipt name the
+allowance, the inventory row is marked `allowed`, and the Claude bridge stays
+enabled. `migrate native` reports the same row as allowed and never selects it
+for archiving. A Cua update that changes the bytes is drift until it is
+explicitly re-reviewed with `skills hook install --agent claude
+--review-cua-driver-skill --apply`, or the reviewed bytes are restored. The
+tradeoff is one reviewed digest per content version instead of a path rule that
+would silently accept any future content; every other unmanaged copy and every
+symlink still refuses.
+
 Claude hook installation sets `syncClaudeAiSkills: false` in user settings to
 stop [account skill synchronization](https://code.claude.com/docs/en/skills#skills-synced-from-claudeai)
 from recreating native copies. The prompt hook checks that setting. Vendor

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.96
+
+- Add the first supported native skill allowance, for the Cua Driver skill. The Cua app installs a GUI-automation skill at `~/.claude/skills/cua-driver`; the owner decided to keep that copy instead of retiring it. `skills hook install --agent claude` now accepts exactly that copy and records it in `bridge.nativeSkillAllowances` when it is the canonical Claude user skill directory, a link-free tree, byte-identical to the Cua app's own target at `~/.cua-driver/skills/cua-driver`, and its `SKILL.md` declares the `cua-driver` name. The plan and JSON receipt name the allowance, mark the inventory row `allowed`, keep `requiresNativeRetirement` false, and leave the Claude bridge and its `Skill(skills-cli)` permission enabled; the allowed copy is not counted as unmanaged drift. `skills migrate native` reports the same row as allowed and never selects it for archiving, while every other unmanaged copy, every symlink, and a copy whose bytes differ from its reviewed identity still refuse.
+- Cua updates are pinned, not silently adopted. A changed skill digest is visible drift until an operator reviews the new pair with `skills hook install --agent claude --review-cua-driver-skill --apply`, which re-validates the canonical path, the byte-identical Cua source, and the marker before recording the new digest. The tradeoff is one explicit re-review per content change in exchange for an auditable allowance that cannot widen into a path list: a hand-edited policy row for another agent, path, home, or digest shape is ignored.
+
 ## 0.10.95
 
 - Measure Claude Code 2.1.317, 2.1.318 and 2.1.319 as user-scope native marketplace writers. A declared directory `settingsMarketplaceSource` is accepted on those exact versions, with the same normalized settings, known-marketplace and installed-plugin shape for an isolated add/install as 2.1.302. The measurements were run with a synthetic `CLAUDE_CONFIG_DIR` on station14, station12 and station07 and are recorded in `hasna-internal/harnesses` at `adapters/claude-code/validation/writer-measurements/2026-11-08.json`.
