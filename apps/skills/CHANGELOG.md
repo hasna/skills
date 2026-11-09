@@ -2,7 +2,7 @@
 
 ## 0.10.95
 
-- Measure Claude Code 2.1.317, 2.1.318 and 2.1.319 as user-scope native marketplace writers. A declared directory `settingsMarketplaceSource` is accepted on those exact versions, with the same normalized settings, known-marketplace and installed-plugin post-states as 2.1.302. The measurements were run in isolated HOMEs on station14, station12 and station07 and are recorded in `hasna-internal/harnesses` at `validation/writer-measurements/2026-11-08.json`.
+- Measure Claude Code 2.1.317, 2.1.318 and 2.1.319 as user-scope native marketplace writers. A declared directory `settingsMarketplaceSource` is accepted on those exact versions, with the same normalized settings, known-marketplace and installed-plugin shape for an isolated add/install as 2.1.302. The measurements were run with a synthetic `CLAUDE_CONFIG_DIR` on station14, station12 and station07 and are recorded in `hasna-internal/harnesses` at `adapters/claude-code/validation/writer-measurements/2026-11-08.json`.
 
 ## 0.10.94
 

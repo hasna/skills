@@ -341,7 +341,7 @@ test("a malformed current settings marketplace map or selected row cannot be nor
 });
 
 test("settings marketplace mutation is explicit and restricted to the measured native operation", () => {
-  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.297", "2.1.298", "2.1.303", "2.1.313", "2.1.315", "2.1.314-beta", "2.1.316+local", "2.1.316.1", "2.1.317-beta", "2.1.317.1", "2.1.318+local", "2.1.319-beta", "2.1.293-beta", "2.1.296+local", "2.1.300-beta", "2.1.300+local", "2.1.301-beta", "2.1.301+local", "2.1.302-beta", "2.1.302+local", "2.1.300.1", "2.1.301.1", "2.1.302.1", " 2.1.301", "2.1.301 (Other)", "2-1-301", "201.301", "2.11301", "2.1.301 (claude code)", "2.1.302 (CLAUDE CODE)"]) {
+  for (const version of ["2.1.292", "2.1.294", "2.1.295", "2.1.297", "2.1.298", "2.1.303", "2.1.313", "2.1.315", "2.1.320", "2.1.314-beta", "2.1.316+local", "2.1.316.1", "2.1.317-beta", "2.1.317.1", "2.1.318+local", "2.1.319-beta", "2.1.293-beta", "2.1.296+local", "2.1.300-beta", "2.1.300+local", "2.1.301-beta", "2.1.301+local", "2.1.302-beta", "2.1.302+local", "2.1.300.1", "2.1.301.1", "2.1.302.1", " 2.1.301", "2.1.301 (Other)", "2-1-301", "201.301", "2.11301", "2.1.301 (claude code)", "2.1.302 (CLAUDE CODE)"]) {
     const f = fixture(); f.request.native.executable.version = version;
     f.request.candidate.settingsMarketplaceSource = "directory";
     expect(() => review(f.request)).toThrow("measured Claude user-scope writer");
@@ -366,6 +366,16 @@ test("measured fleet Claude writers accept the declared directory operation", ()
     };
     expect(review(f.request).accepted).toBe(true);
   }
+});
+
+test("the measured writer also accepts a bare exact version", () => {
+  const f = fixture();
+  f.request.native.executable.version = "2.1.319";
+  f.request.candidate.settingsMarketplaceSource = "directory";
+  f.request.delta.settingsAfter.extraKnownMarketplaces = {
+    "fixture-market": { source: { source: "directory", path: f.candidateRoot } },
+  };
+  expect(review(f.request).accepted).toBe(true);
 });
 
 test("prospective review accepts an exact user-scoped frozen candidate without writing native state", () => {
