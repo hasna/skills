@@ -13,13 +13,13 @@ test("registry admits codex-cli 0.160.1 with exactly the 0.160.0 capabilities", 
   expect([...SUPPORTED_CODEX_HOOK_VERSIONS]).toEqual(["codex-cli 0.153.0", "codex-cli 0.154.0", "codex-cli 0.155.0", "codex-cli 0.155.1",
     "codex-cli 0.156.1", "codex-cli 0.157.0", "codex-cli 0.157.1", "codex-cli 0.158.0", "codex-cli 0.159.0", "codex-cli 0.159.2",
     "codex-cli 0.160.0", "codex-cli 0.160.1", "codex-cli 0.161.0", "codex-cli 0.162.0", "codex-cli 0.162.1", "codex-cli 0.163.0", "codex-cli 0.164.0", "codex-cli 0.165.0",
-    "codex-cli 0.166.0"]);
+    "codex-cli 0.166.0", "codex-cli 0.167.0"]);
   expect(Object.isFrozen(SUPPORTED_CODEX_HOOK_VERSIONS)).toBe(true);
 });
 
 test("registry refuses unmeasured neighbours and malformed version strings for every capability", () => {
   const refused: unknown[] = [
-    "codex-cli 0.160.2", "codex-cli 0.162.2", "codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.0", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0+build.1", "codex-cli 0.165.0-alpha.1", "codex-cli 0.163.0-alpha.1", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0-rc.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10", "codex-cli 0.16.1",
+    "codex-cli 0.160.2", "codex-cli 0.162.2", "codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0+build.1", "codex-cli 0.165.0-alpha.1", "codex-cli 0.163.0-alpha.1", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0-rc.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10", "codex-cli 0.16.1",
     "codex-cli 1.160.1", "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.1-rc.1", "codex-cli 0.160.1+build.1", "codex-cli 0.160.01",
     "codex-cli 0.160", "codex-cli 0.160.x", "codex-cli 0.160.*", "codex-cli >=0.160.0", "codex-cli ^0.160.0", "codex-cli ~0.160.1",
     "0.160.1", "v0.160.1", "codex-cli v0.160.1", "Codex-CLI 0.160.1", "codex 0.160.1", "codex-cli  0.160.1", " codex-cli 0.160.1",
@@ -116,7 +116,7 @@ test("exact 0.163.0 contract admits native catalog and stored review evidence wi
     expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.163.0", previous))).toThrow("bounds are invalid");
     expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.163.0"))).toThrow("bounds are invalid");
   }
-  for (const version of ["codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.0", "codex-cli 0.162.2", "codex-cli 0.163.0-alpha.1", "codex-cli 0.163.0-rc.1", "codex-cli 0.163.0+build.1",
+  for (const version of ["codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.162.2", "codex-cli 0.163.0-alpha.1", "codex-cli 0.163.0-rc.1", "codex-cli 0.163.0+build.1",
     "codex-cli >=0.163.0", "codex-cli ^0.163.0", "codex-cli 0.163", "codex-cli 0.163.00", "codex-cli v0.163.0", "0.163.0", "codex-cli 0.163.0 "]) {
     expect({ version, capabilities: capabilities(version) }).toEqual({ version, capabilities: [] });
     expect((SUPPORTED_CODEX_HOOK_VERSIONS as readonly string[]).includes(version)).toBe(false);
@@ -135,7 +135,7 @@ test("exact 0.164.0 contract admits native catalog and stored review evidence wi
     expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.164.0", previous))).toThrow("bounds are invalid");
     expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.164.0"))).toThrow("bounds are invalid");
   }
-  for (const version of ["codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.0", "codex-cli 0.162.2", "codex-cli 0.164.0-alpha.1", "codex-cli 0.164.0-rc.1", "codex-cli 0.164.0+build.1",
+  for (const version of ["codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.162.2", "codex-cli 0.164.0-alpha.1", "codex-cli 0.164.0-rc.1", "codex-cli 0.164.0+build.1",
     "codex-cli >=0.164.0", "codex-cli ^0.164.0", "codex-cli 0.163", "codex-cli 0.164.00", "codex-cli v0.164.0", "0.164.0", "codex-cli 0.164.0 "]) {
     expect({ version, capabilities: capabilities(version) }).toEqual({ version, capabilities: [] });
     expect((SUPPORTED_CODEX_HOOK_VERSIONS as readonly string[]).includes(version)).toBe(false);
@@ -154,7 +154,7 @@ test("exact 0.165.0 contract admits native catalog and stored review evidence wi
     expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.165.0", previous))).toThrow("bounds are invalid");
     expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.165.0"))).toThrow("bounds are invalid");
   }
-  for (const version of ["codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.0", "codex-cli 0.164.1", "codex-cli 0.165.0-alpha.1", "codex-cli 0.165.0-rc.1", "codex-cli 0.165.0+build.1",
+  for (const version of ["codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.164.1", "codex-cli 0.165.0-alpha.1", "codex-cli 0.165.0-rc.1", "codex-cli 0.165.0+build.1",
     "codex-cli >=0.165.0", "codex-cli ^0.165.0", "codex-cli 0.165", "codex-cli 0.165.00", "codex-cli v0.165.0", "0.165.0", "codex-cli 0.165.0 "]) {
     expect({ version, capabilities: capabilities(version) }).toEqual({ version, capabilities: [] });
     expect((SUPPORTED_CODEX_HOOK_VERSIONS as readonly string[]).includes(version)).toBe(false);
@@ -173,7 +173,7 @@ test("exact 0.166.0 contract admits native catalog and stored review evidence wi
     expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.166.0", previous))).toThrow("bounds are invalid");
     expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.166.0"))).toThrow("bounds are invalid");
   }
-  for (const version of ["codex-cli 0.166.1", "codex-cli 0.167.0", "codex-cli 0.165.1", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0-rc.1", "codex-cli 0.166.0+build.1",
+  for (const version of ["codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.165.1", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0-rc.1", "codex-cli 0.166.0+build.1",
     "codex-cli >=0.166.0", "codex-cli ^0.166.0", "codex-cli 0.166", "codex-cli 0.166.00", "codex-cli v0.166.0", "0.166.0", "codex-cli 0.166.0 "]) {
     expect({ version, capabilities: capabilities(version) }).toEqual({ version, capabilities: [] });
     expect((SUPPORTED_CODEX_HOOK_VERSIONS as readonly string[]).includes(version)).toBe(false);

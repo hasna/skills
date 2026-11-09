@@ -104,7 +104,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   return command;
 }
 
-for (const versionLine of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.2", "codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.0", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0+build.1", "codex-cli 0.165.0-alpha.1", "codex-cli 0.165.0+build.1", "codex-cli 0.164.0-alpha.1", "codex-cli 0.164.0+build.1", "codex-cli 0.163.0-alpha.1", "codex-cli 0.163.0+build.1", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0-rc.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10",
+for (const versionLine of ["codex-cli 0.160.2", "codex-cli 0.161.1", "codex-cli 0.162.2", "codex-cli 0.163.1", "codex-cli 0.164.1", "codex-cli 0.165.1", "codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0+build.1", "codex-cli 0.165.0-alpha.1", "codex-cli 0.165.0+build.1", "codex-cli 0.164.0-alpha.1", "codex-cli 0.164.0+build.1", "codex-cli 0.163.0-alpha.1", "codex-cli 0.163.0+build.1", "codex-cli 0.162.0-alpha.1", "codex-cli 0.162.0-rc.1", "codex-cli 0.162.0+build.1", "codex-cli 0.159.1", "codex-cli 0.159.3", "codex-cli 0.160.10",
   "codex-cli 0.160.1-alpha.1", "codex-cli 0.160.1+build.1", "codex-cli 0.160", "codex-cli v0.160.1", "Codex-CLI 0.160.1", "codex-cli  0.160.1", "0.160.1"])
   test(`native transport refuses the unmeasured neighbour ${JSON.stringify(versionLine)} before RPC`, async () => {
     const home = mkdtempSync(join(tmpdir(), "skills-rpc-neighbour-")), spawned = join(home, "spawned");

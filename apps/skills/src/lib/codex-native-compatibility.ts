@@ -51,6 +51,17 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // It passed the same native acceptance as 0.165.0. Corpus admission and hook
   // trust stay separately required.
   "codex-cli 0.166.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // codex-cli 0.167.0 (npm @openai/codex-linux-arm64 vendor binary sha256 2fe94d84)
+  // emits byte-identical app-server schemas to 0.166.0 for every method Skills
+  // calls: initialize response, config/read, config/batchWrite, configWarning,
+  // experimentalFeature/list, skills/list, plugin/installed, plugin/install and
+  // hooks/list. initialize params gain an optional requiredHumanApproval client
+  // capability and command approvals gain a humanCommand kind behind it; Skills
+  // does not send that capability, so the server never issues it, and the client
+  // request/notification unions it does not read are unchanged for Skills'
+  // projection. Native acceptance passes on 0.167.0 as on 0.166.0. Corpus
+  // admission and hook trust stay separately required.
+  "codex-cli 0.167.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and
