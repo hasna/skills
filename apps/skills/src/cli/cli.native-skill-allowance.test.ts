@@ -66,6 +66,16 @@ test("the real hook install and migrate native commands accept, record and repor
   expect([applied.status, applied.stderr]).toEqual([0, ""]);
   expect(JSON.parse(applied.stdout).applied).toBe(true);
 
+  // Re-planning the installed state must not self-disable the recorded
+  // allowance, and the documented explicit re-review stays a no-op.
+  const replanned = await f.run(["hook", "install", "--agent", "claude", "--json"]);
+  expect([replanned.status, replanned.stderr]).toEqual([0, ""]);
+  expect(JSON.parse(replanned.stdout).planned).toEqual([]);
+  expect(JSON.parse(replanned.stdout).nativeSkillAllowances).toEqual(plan.nativeSkillAllowances);
+  const rereviewed = await f.run(["hook", "install", "--agent", "claude", "--review-cua-driver-skill", "--json"]);
+  expect([rereviewed.status, rereviewed.stderr]).toEqual([0, ""]);
+  expect(JSON.parse(rereviewed.stdout).planned).toEqual([]);
+
   const reviewed = await f.run(["migrate", "native", "--agent", "claude", "--project", f.home, "--include-unmanaged", "--json"]);
   expect([reviewed.status, reviewed.stderr]).toEqual([0, ""]);
   const inventory = JSON.parse(reviewed.stdout);
@@ -77,5 +87,35 @@ test("the real hook install and migrate native commands accept, record and repor
   const migrated = await f.run(["migrate", "native", "--agent", "claude", "--project", f.home, "--include-unmanaged", "--apply", "--json"]);
   expect([migrated.status, migrated.stderr]).toEqual([0, ""]);
   expect(JSON.parse(migrated.stdout).entries).toEqual([]);
+  expect(existsSync(join(f.copy, "SKILL.md"))).toBe(true);
+
+  // An exact target manifest cannot be used to archive the allowed copy either.
+  const manifest = join(f.home, "native-targets.json");
+  writeFileSync(manifest, JSON.stringify({ schema: "hasna.skills-native-migration-targets.v1", targets: [{ agent: "claude", projectRoot: f.home, path: join(".claude", "skills", "cua-driver"), treeSha256: inventory.nativeSkillAllowances[0].treeSha256 }] }));
+  const manifestApply = await f.run(["migrate", "native", "--agent", "claude", "--target-manifest", manifest, "--apply", "--json"]);
+  expect(manifestApply.status).toBe(1);
+  expect(manifestApply.stderr).toContain("allowed native skill copy");
+  expect(existsSync(join(f.copy, "SKILL.md"))).toBe(true);
+});
+
+test("an absent policy makes the real migrate command refuse a broad archive", async () => {
+  const f = fixture();
+  // No hook install: the policy is absent, so no allowance can be proven.
+  const migrated = await f.run(["migrate", "native", "--agent", "claude", "--project", f.home, "--include-unmanaged", "--apply", "--json"]);
+  expect(migrated.status).toBe(1);
+  expect(migrated.stderr).toContain("cannot prove the Cua driver allowance");
+  expect(existsSync(join(f.copy, "SKILL.md"))).toBe(true);
+});
+
+test("an unreadable policy makes the real migrate command refuse a broad archive", async () => {
+  const f = fixture();
+  const installed = await f.run(["hook", "install", "--agent", "claude", "--apply", "--json"]);
+  expect([installed.status, installed.stderr]).toEqual([0, ""]);
+  // The allowance cannot be proven from this policy; the broad --apply review
+  // must refuse instead of archiving the canonical copy as unmanaged.
+  writeFileSync(join(f.data, "agent-policy.json"), "{not valid policy");
+  const migrated = await f.run(["migrate", "native", "--agent", "claude", "--project", f.home, "--include-unmanaged", "--apply", "--json"]);
+  expect(migrated.status).toBe(1);
+  expect(migrated.stderr).toContain("cannot prove the Cua driver allowance");
   expect(existsSync(join(f.copy, "SKILL.md"))).toBe(true);
 });

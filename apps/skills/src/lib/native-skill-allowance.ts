@@ -11,12 +11,16 @@ import { join } from "node:path";
  * all of these hold:
  *   - it is the exact canonical Claude user skill directory below;
  *   - it is a real directory tree with no link anywhere in it;
- *   - its bytes are identical to the Cua app's own install target;
+ *   - its bytes and POSIX types/modes are identical to the Cua app's own
+ *     install target at review time;
  *   - its SKILL.md declares the Cua driver name;
  *   - the bytes equal the content digest reviewed and pinned in the policy.
- * The content digest is recorded on first review and pinned afterwards. A Cua
- * update that changes the bytes is visible drift until an operator explicitly
- * re-reviews it; it is never adopted silently.
+ * The first plan that observes the exact pair is the review: it records the
+ * digest in the plan/policy rather than skipping the copy silently. The digest
+ * then binds the ongoing identity; the Cua source comparison is review-time
+ * provenance, not a per-hook re-check, and POSIX modes are not part of the
+ * digest. A Cua update that changes the bytes is visible drift until an
+ * operator explicitly re-reviews it; it is never adopted silently.
  */
 export const CUA_DRIVER_NATIVE_ALLOWANCE = Object.freeze({
   id: "cua-driver" as const,
@@ -82,7 +86,7 @@ export function isCuaDriverSkillDocument(text: string): boolean {
 export function normalizeNativeSkillAllowances(value: unknown, context: { home: string; canonical: (path: string) => string }): NativeSkillAllowance[] {
   if (!Array.isArray(value)) return [];
   const { path, source } = cuaDriverNativePaths(context);
-  const keys = [...ALLOWANCE_KEYS].sort().join(","), paths = new Set<string>(), normalized: NativeSkillAllowance[] = [];
+  const keys = [...ALLOWANCE_KEYS].sort().join(","), byPath = new Map<string, NativeSkillAllowance>();
   for (const row of value.slice(0, MAX_ALLOWANCES)) {
     if (!row || typeof row !== "object" || Array.isArray(row)) continue;
     const item = row as Record<string, unknown>;
@@ -91,13 +95,15 @@ export function normalizeNativeSkillAllowances(value: unknown, context: { home: 
     if (item.path !== path || item.source !== source) continue;
     if (typeof item.treeSha256 !== "string" || !SHA256.test(item.treeSha256)) continue;
     if (item.sourceTreeSha256 !== item.treeSha256) continue;
-    // Exactly one reviewed identity exists. A second row for the canonical
-    // path is ambiguous, so it grants nothing rather than choosing a digest.
-    if (paths.has(path)) return [];
-    paths.add(path);
-    normalized.push({ id: CUA_DRIVER_NATIVE_ALLOWANCE.id, agent: CUA_DRIVER_NATIVE_ALLOWANCE.agent, name: CUA_DRIVER_NATIVE_ALLOWANCE.name, path, treeSha256: item.treeSha256, source, sourceTreeSha256: item.treeSha256 });
+    const existing = byPath.get(path);
+    // An exact repeated row (for example the policy row also supplied by the
+    // installing plan) is the same review, so it is harmless and deduplicated.
+    // Two different digests for the canonical path are ambiguous and grant
+    // nothing rather than choosing one.
+    if (existing) { if (existing.treeSha256 !== item.treeSha256) return []; continue; }
+    byPath.set(path, { id: CUA_DRIVER_NATIVE_ALLOWANCE.id, agent: CUA_DRIVER_NATIVE_ALLOWANCE.agent, name: CUA_DRIVER_NATIVE_ALLOWANCE.name, path, treeSha256: item.treeSha256, source, sourceTreeSha256: item.treeSha256 });
   }
-  return normalized;
+  return [...byPath.values()];
 }
 
 /** The reviewed allowance an inventoried copy matches exactly, or undefined. */

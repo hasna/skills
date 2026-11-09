@@ -759,14 +759,21 @@ export function registerAgentIntegration(parent: Command): void {
         const targetManifest = options.targetManifest ? readNativeMigrationTargetManifest(options.targetManifest) : undefined;
         if (options.apply && options.reviewedCacheAlias && !targetManifest) throw new Error("Applying a reviewed cache alias requires an exact --target-manifest");
         const includeVendor = options.includeVendor || Boolean(targetManifest?.targets.some(target => target.vendor));
-        // An unreadable policy grants no allowance; the copy stays an ordinary
-        // unmanaged inventory row rather than being silently adopted.
-        let nativeSkillAllowances: unknown[] | undefined;
+        // An absent or unreadable policy proves no allowance, so the canonical
+        // Cua entry is marked and a broad archive refuses it instead of
+        // consuming it. The JSON review still shows the row (with
+        // allowanceUnknown) so the operator can repair the policy.
+        let nativeSkillAllowances: unknown[] | undefined, nativeSkillAllowancePolicyUnproven = false;
         try {
-          const recorded = readManagedSkillPolicySnapshot()?.value?.bridge?.nativeSkillAllowances;
+          const snapshot = readManagedSkillPolicySnapshot();
+          const recorded = snapshot?.value?.bridge?.nativeSkillAllowances;
           nativeSkillAllowances = Array.isArray(recorded) ? recorded : undefined;
-        } catch { nativeSkillAllowances = undefined; }
-        const inventory = inventoryNativeSkills(undefined, { projectDirs: [process.cwd(), ...(options.project ? [options.project] : [])], agents: options.agent ? [options.agent as IntegrationAgent] : undefined, includeVendor, configured: includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, nativeSkillAllowances });
+          if (!snapshot) nativeSkillAllowancePolicyUnproven = true;
+        } catch {
+          nativeSkillAllowances = undefined;
+          nativeSkillAllowancePolicyUnproven = true;
+        }
+        const inventory = inventoryNativeSkills(undefined, { projectDirs: [process.cwd(), ...(options.project ? [options.project] : [])], agents: options.agent ? [options.agent as IntegrationAgent] : undefined, includeVendor, configured: includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, reviewedCacheAlias: options.reviewedCacheAlias, nativeSkillAllowances, nativeSkillAllowancePolicyUnproven });
         if (targetManifest) selectNativeMigrationTargets(inventory, targetManifest);
         const result = options.apply ? archiveNativeSkills(inventory, { includeUnmanaged: options.includeUnmanaged, includeVendor: options.includeVendor, allowRootAliases: options.allowRootAliases, targetManifest }) : { entries: [], ...(targetManifest ? { targetManifest: { schema: targetManifest.schema, digest: targetManifest.digest, targetCount: targetManifest.targets.length } } : {}) };
         const allowances = inventory.flatMap(entry => entry.allowed ? [{ id: entry.allowed.id, agent: entry.agent, path: entry.path, treeSha256: entry.allowed.treeSha256 }] : []);

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import type { ReviewedDiscoveryInputs } from "./agent-discovery.js";
-import { applyAgentIntegration, archiveNativeSkills, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration } from "./agent-integration.js";
+import { applyAgentIntegration, archiveNativeSkills, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration, readNativeMigrationTargetManifest, selectNativeMigrationTargets } from "./agent-integration.js";
 import { normalizeNativeSkillAllowances } from "./native-skill-allowance.js";
 
 // The supported allowance is exactly one reviewed Cua driver copy. These tests
@@ -49,6 +49,18 @@ function fixture() {
   writeCuaTree(source); writeCuaTree(copy);
   return { home, dataDir, source, copy };
 }
+/** A reviewed Claude binding captured before the Cua copy appears, then the copy. */
+function reviewedCuaFixture() {
+  const home = mkdtempSync(join(tmpdir(), "skills-cua-reviewed-")); roots.push(home);
+  const dataDir = join(home, ".hasna", "skills"); mkdirSync(dataDir, { recursive: true });
+  applyAgentIntegration(planAgentIntegration({ home, dataDir, agents: ["claude"] }));
+  const settings = join(home, ".claude", "settings.json"), registry = join(home, ".claude", "plugins", "installed_plugins.json");
+  const review: ReviewedDiscoveryInputs = { version: 1, agents: [{ agent: "claude", roots: [], sources: [{ path: settings, sha256: createHash("sha256").update(readFileSync(settings)).digest("hex") }, { path: registry, sha256: null }], pluginHooks: "reviewed-no-skill-injection" }] };
+  applyAgentIntegration(planAgentIntegration({ home, dataDir, agents: ["claude"], discoveryInputs: review }));
+  const source = join(home, ".cua-driver", "skills", "cua-driver"), copy = join(home, ".claude", "skills", "cua-driver");
+  writeCuaTree(source); writeCuaTree(copy);
+  return { home, dataDir, source, copy };
+}
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 test("the exact reviewed Cua driver copy is allowed, recorded and stable across plans", () => {
@@ -75,25 +87,50 @@ test("the exact reviewed Cua driver copy is allowed, recorded and stable across 
   expect(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).toBe(policyText);
 });
 
-test("a retained reviewed Claude binding accepts the newly copied Cua skill and records the allowance", () => {
+test("a retained reviewed Claude binding records the newly copied Cua skill and keeps accepting it on re-plan", () => {
   // Station shape: a reviewed binding was captured while the Claude skills
   // folder held only the bridge. The Cua app later materializes a real copy;
   // plain `hook install` over the retained review must accept that exact
-  // identity and record it in the plan instead of refusing drift.
-  const home = mkdtempSync(join(tmpdir(), "skills-cua-reviewed-")); roots.push(home);
-  const dataDir = join(home, ".hasna", "skills"); mkdirSync(dataDir, { recursive: true });
-  applyAgentIntegration(planAgentIntegration({ home, dataDir, agents: ["claude"] }));
-  const settings = join(home, ".claude", "settings.json"), registry = join(home, ".claude", "plugins", "installed_plugins.json");
-  const review: ReviewedDiscoveryInputs = { version: 1, agents: [{ agent: "claude", roots: [], sources: [{ path: settings, sha256: createHash("sha256").update(readFileSync(settings)).digest("hex") }, { path: registry, sha256: null }], pluginHooks: "reviewed-no-skill-injection" }] };
-  applyAgentIntegration(planAgentIntegration({ home, dataDir, agents: ["claude"], discoveryInputs: review }));
-  expect(JSON.parse(readFileSync(join(dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude.method).toBe("reviewed");
-  writeCuaTree(join(home, ".cua-driver", "skills", "cua-driver"));
-  writeCuaTree(join(home, ".claude", "skills", "cua-driver"));
-  const plan = planAgentIntegration({ home, dataDir, agents: ["claude"] });
-  expect(plan.changes.map(change => change.path)).toEqual([join(dataDir, "agent-policy.json")]);
+  // identity, record it in the plan, and keep accepting the recorded plan.
+  const f = reviewedCuaFixture();
+  expect(JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude.method).toBe("reviewed");
+  const plan = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] });
+  expect(plan.changes.map(change => change.path)).toEqual([join(f.dataDir, "agent-policy.json")]);
   expect(plan.nativeSkillAllowances).toHaveLength(1);
   applyAgentIntegration(plan);
-  expect(() => assertManagedAgentBridge("claude", { home, dataDir, projectDir: home })).not.toThrow();
+  expect(() => assertManagedAgentBridge("claude", { home: f.home, dataDir: f.dataDir, projectDir: f.home })).not.toThrow();
+
+  // The recorded policy row and the plan row are the same review; the plan must
+  // not read their concatenation as an ambiguous second identity.
+  const replanned = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] });
+  expect(replanned.changes).toEqual([]);
+  expect(replanned.nativeSkillAllowances).toEqual(plan.nativeSkillAllowances);
+  expect(applyAgentIntegration(replanned).changed).toEqual([]);
+  expect(() => assertManagedAgentBridge("claude", { home: f.home, dataDir: f.dataDir, projectDir: f.home })).not.toThrow();
+
+  // The documented explicit re-review is also a no-op when the bytes are unchanged.
+  const rereviewed = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"], reviewCuaDriverSkill: true });
+  expect(rereviewed.changes).toEqual([]);
+  expect(applyAgentIntegration(rereviewed).changed).toEqual([]);
+  expect(() => assertManagedAgentBridge("claude", { home: f.home, dataDir: f.dataDir, projectDir: f.home })).not.toThrow();
+});
+
+test("a reviewed binding re-pins an updated Cua pair only through the explicit review", () => {
+  const f = reviewedCuaFixture();
+  applyAgentIntegration(planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] }));
+  const reviewed = JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).bridge.nativeSkillAllowances[0].treeSha256;
+  for (const directory of [f.source, f.copy]) writeFileSync(join(directory, "references", "usage.md"), "Updated by a newer Cua driver release.\n");
+  expect(() => planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] })).toThrow(new RegExp(`changed after its reviewed allowance \\(reviewed ${reviewed}, found [0-9a-f]{64}\\)`));
+
+  const plan = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"], reviewCuaDriverSkill: true });
+  expect(plan.nativeSkillAllowances![0]!.treeSha256).not.toBe(reviewed);
+  applyAgentIntegration(plan);
+  expect(() => assertManagedAgentBridge("claude", { home: f.home, dataDir: f.dataDir, projectDir: f.home })).not.toThrow();
+  // The new pin is equally stable against the next plain re-plan.
+  const replanned = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] });
+  expect(replanned.changes).toEqual([]);
+  expect(applyAgentIntegration(replanned).changed).toEqual([]);
+  expect(() => assertManagedAgentBridge("claude", { home: f.home, dataDir: f.dataDir, projectDir: f.home })).not.toThrow();
 });
 
 test("a different unmanaged native skill still refuses next to the allowed Cua copy", () => {
@@ -193,6 +230,35 @@ test("an allowance row is bound to the canonical path and home, never a blanket 
   // Moving the same row to another home is ignored too.
   expect(normalizeNativeSkillAllowances([allowance], { home: join(f.home, "elsewhere"), canonical: p => p })).toEqual([]);
   expect(normalizeNativeSkillAllowances([allowance], { home: f.home, canonical: p => p })).toEqual([allowance]);
-  // Two rows for the canonical path are ambiguous and grant nothing.
+  // The policy row plus the identical plan row is the same review, not ambiguity.
+  expect(normalizeNativeSkillAllowances([allowance, { ...allowance }], { home: f.home, canonical: p => p })).toEqual([allowance]);
+  // Two different digests for the canonical path are ambiguous and grant nothing.
   expect(normalizeNativeSkillAllowances([allowance, { ...allowance, treeSha256: "f".repeat(64), sourceTreeSha256: "f".repeat(64) }], { home: f.home, canonical: p => p })).toEqual([]);
+});
+
+test("an exact migration manifest cannot archive the allowed Cua copy", () => {
+  const f = fixture();
+  applyAgentIntegration(planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] }));
+  const policy = JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8"));
+  const inventory = inventoryNativeSkills(f.home, { agents: ["claude"], nativeSkillAllowances: policy.bridge.nativeSkillAllowances });
+  const allowed = inventory.find(entry => entry.path === f.copy)!;
+  expect(allowed.allowed?.id).toBe("cua-driver");
+  const manifestPath = join(f.home, "native-targets.json");
+  writeFileSync(manifestPath, JSON.stringify({ schema: "hasna.skills-native-migration-targets.v1", targets: [{ agent: "claude", projectRoot: f.home, path: join(".claude", "skills", "cua-driver"), treeSha256: allowed.hash }] }));
+  const manifest = readNativeMigrationTargetManifest(manifestPath);
+  expect(() => selectNativeMigrationTargets(inventory, manifest)).toThrow(/allowed native skill copy/);
+  expect(() => archiveNativeSkills(inventory, { dataDir: f.dataDir, targetManifest: manifest })).toThrow(/allowed native skill copy/);
+  expect(existsSync(join(f.copy, "SKILL.md"))).toBe(true);
+});
+
+test("an absent or unreadable policy cannot let a broad migration archive the Cua copy", () => {
+  const f = fixture();
+  // No allowance is available, so the inventory marks the canonical entry as
+  // unproven; a broad archive must refuse rather than treat it as unmanaged.
+  const inventory = inventoryNativeSkills(f.home, { agents: ["claude"], nativeSkillAllowancePolicyUnproven: true });
+  const entry = inventory.find(item => item.path === f.copy);
+  expect(entry?.allowed).toBeUndefined();
+  expect(entry?.allowanceUnknown).toBe(true);
+  expect(() => archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true })).toThrow(/cannot prove the Cua driver allowance/);
+  expect(existsSync(join(f.copy, "SKILL.md"))).toBe(true);
 });

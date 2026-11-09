@@ -43,7 +43,7 @@ export type { IntegrationAgent } from "./agent-adapters.js";
 export type { NativeSkillAllowance } from "./native-skill-allowance.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
 export interface AgentRootAlias { agent: IntegrationAgent; home: string; alias: string; target: string; link: string; aliasIdentity: string; targetIdentity: string }
-export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; system?: boolean; bridge?: boolean; bridgeHome?: string; rootAlias?: AgentRootAlias; codexHome?: string; allowed?: { id: string; treeSha256: string } }
+export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; system?: boolean; bridge?: boolean; bridgeHome?: string; rootAlias?: AgentRootAlias; codexHome?: string; allowed?: { id: string; treeSha256: string }; allowanceUnknown?: true }
 export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string; vendor?: true }
 export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
@@ -267,22 +267,38 @@ function treeHash(root: string): string {
   assertSafePath(root); visit(root); return hash.digest("hex");
 }
 
-/**
- * Capture the exact reviewed Cua driver identity, or undefined when the
+/** The migration tree hash binds names, sizes and bytes, not POSIX modes. At
+ * review, also require the two Cua trees to have identical types and mode bits
+ * so a mode change is not enrolled unnoticed. Later mode changes are not part
+ * of the pinned identity (the digest is); this is review-time evidence. */
+function cuaTreeModesEqual(left: string, right: string): boolean {
+  function modes(root: string): string[] {
+    const result: string[] = [];
+    function visit(path: string): void {
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) throw new Error("Refusing symlink in skill");
+      result.push(`${relative(root, path)}\0${stat.isDirectory() ? "d" : stat.isFile() ? "f" : "?"}\0${stat.mode & 0o7777}`);
+      if (stat.isDirectory()) for (const name of readdirSync(path).sort()) visit(join(path, name));
+    }
+    visit(root); return result;
+  }
+  try { return JSON.stringify(modes(left)) === JSON.stringify(modes(right)); } catch { return false; }
+}
+
+/** Capture the exact reviewed Cua driver identity, or undefined when the
  * canonical pair is absent or does not match. Both directories must be real
  * trees (treeHash refuses any link), byte-identical to each other, and the
  * Claude-side SKILL.md must declare the Cua driver name. Nothing is written
  * here; the caller records the returned row in the policy and plan. A copy
  * that changed after its last review therefore produces no fresh allowance and
- * stays visible drift until it is explicitly re-reviewed.
- */
+ * stays visible drift until it is explicitly re-reviewed. */
 function captureCuaDriverSkillAllowance(home: string, aliases: AgentRootAlias[]): NativeSkillAllowance | undefined {
   const canonical = (path: string) => canonicalAgentPath(path, aliases), { path, source } = cuaDriverNativePaths({ home, canonical });
   try {
     assertSafePath(path); assertSafePath(source);
     if (!lstatSync(path, { throwIfNoEntry: false })?.isDirectory() || !lstatSync(source, { throwIfNoEntry: false })?.isDirectory()) return undefined;
     const digest = treeHash(path);
-    if (digest !== treeHash(source)) return undefined;
+    if (digest !== treeHash(source) || !cuaTreeModesEqual(path, source)) return undefined;
     if (!isCuaDriverSkillDocument(readNativeBytes(join(path, "SKILL.md"), 1024 * 1024).toString("utf8"))) return undefined;
     return buildCuaDriverNativeAllowance({ home, canonical }, digest);
   } catch { return undefined; }
@@ -348,6 +364,10 @@ export function selectNativeMigrationTargets(inventory: NativeSkillEntry[], mani
     const matches = inventory.filter(entry => entry.agent === target.agent && resolve(entry.path) === expected);
     if (matches.length !== 1) throw new Error(`Native migration target was not found exactly once: ${target.agent} ${target.projectRoot}/${target.path}`);
     const entry = matches[0]!;
+    // An allowed copy is a reviewed exception, not migration input. A broad
+    // selector already skips it; an exact manifest must refuse it too, so no
+    // path can archive the recorded allowance.
+    if (entry.allowed) throw new Error(`Native migration target is an allowed native skill copy; remove its recorded review before archiving: ${entry.path}`);
     if (entry.bridge || entry.system || entry.vendor !== (target.vendor === true)) throw new Error(`Native migration target is protected or vendor classification changed: ${entry.path}`);
     if (entry.hash !== target.treeSha256 || treeHash(entry.path) !== target.treeSha256) throw new Error(`Native migration target changed after review: ${entry.path}`);
     selected.push(entry);
@@ -368,7 +388,7 @@ function isCodexSkillDiscoveryInput(path: string): boolean {
   return false;
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; nativeSkillAllowances?: readonly unknown[]; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean; codexInstallationInputRoots?: readonly string[] } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean; reviewedCacheAlias?: string; nativeSkillAllowances?: readonly unknown[]; nativeSkillAllowancePolicyUnproven?: boolean; disabledVendorPaths?: readonly string[]; disabledVendorSkill?: (entry: NativeSkillEntry) => boolean; codexInstallationInputRoots?: readonly string[] } = {}): NativeSkillEntry[] {
   home = canonicalSystemPath(home);
   if (options.reviewedCacheAlias !== undefined && (!options.includeVendor || !isAbsolute(options.reviewedCacheAlias) || resolve(options.reviewedCacheAlias) !== options.reviewedCacheAlias)) throw new Error("A reviewed cache alias requires vendor inventory and an exact absolute path");
   if (options.disabledVendorPaths?.some(path => !isAbsolute(path) || resolve(path) !== path)) throw new Error("Disabled vendor paths must be exact absolute paths");
@@ -376,6 +396,10 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   const disabledVendorPaths = new Set((options.disabledVendorPaths ?? []).map(canonicalSystemPath));
   const aliases = rootAliases(home, options.allowRootAliases);
   const allowedNativeSkills = normalizeNativeSkillAllowances(options.nativeSkillAllowances, { home, canonical: path => canonicalAgentPath(path, aliases) });
+  // When the policy gives no proof (absent or unreadable), the canonical Cua
+  // entry is marked so a broad archive refuses it instead of treating it as an
+  // unmanaged copy.
+  const cuaPath = options.nativeSkillAllowancePolicyUnproven ? cuaDriverNativePaths({ home, canonical: path => canonicalAgentPath(path, aliases) }).path : undefined;
   const selectedAgents = options.agents ? new Set(options.agents) : undefined;
   const includesAgent = (agent: string) => !selectedAgents || selectedAgents.has(agent as IntegrationAgent);
   const rootDefinitions = (selectedAgents
@@ -447,7 +471,8 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       // Only the exact reviewed Cua driver identity is marked allowed; every
       // other copy keeps the ordinary unmanaged-copy refusal.
       const allowed = matchingNativeSkillAllowance({ agent, path, hash, managed, vendor, bridge }, allowedNativeSkills);
-      entries.push({ agent, path, hash, managed, vendor, ...(allowed ? { allowed: { id: allowed.id, treeSha256: allowed.treeSha256 } } : {}), ...(agent === "codex" || isCodexSkillDiscoveryInput(path) ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}), ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
+      const allowanceUnknown = !allowed && cuaPath !== undefined && agent === CUA_DRIVER_NATIVE_ALLOWANCE.agent && path === cuaPath && !vendor && !bridge;
+      entries.push({ agent, path, hash, managed, vendor, ...(allowed ? { allowed: { id: allowed.id, treeSha256: allowed.treeSha256 } } : {}), ...(allowanceUnknown ? { allowanceUnknown: true as const } : {}), ...(agent === "codex" || isCodexSkillDiscoveryInput(path) ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}), ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
     if (depth > (agent === "sumi" ? 32 : vendor ? 32 : 3)) return { ...scan, complete: false };
     // Retired vendor documents leave their shared assets in place. Bound the
@@ -2151,7 +2176,19 @@ function writeArchiveJournal(path: string, value: unknown): void {
   }
 }
 
+/** A broad archive must never consume the Cua driver copy when the agent policy
+ * is absent or unreadable, because that read is the only proof it is an allowed
+ * copy. The caller that saw the unproven policy marks the canonical entry; an
+ * exact target manifest is a separate explicit review and is not blocked here. */
+function assertNoUnprovenCuaArchive(inventory: NativeSkillEntry[], options: { targetManifest?: NativeMigrationTargetManifest; dataDir?: string }): void {
+  if (options.targetManifest) return;
+  const unproven = inventory.filter(entry => entry.allowanceUnknown);
+  if (!unproven.length) return;
+  throw new Error(`Native migration cannot prove the Cua driver allowance because the agent policy is absent or unreadable; refusing to archive ${nativeSkillPathList(unproven.map(entry => entry.path))}. Repair ${join(options.dataDir ?? getDataDir(), "agent-policy.json")}, or review an exact --target-manifest after restoring the policy.`);
+}
+
 export function archiveNativeSkills(inventory: NativeSkillEntry[], options: CodexCorpusWriteOptions & { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } & CodexAdmissionReceipt {
+  assertNoUnprovenCuaArchive(inventory, options);
   const selected = options.targetManifest ? selectNativeMigrationTargets(inventory, options.targetManifest)
     : inventory.filter(entry => !entry.bridge && !entry.system && !entry.allowed && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   const roots = selected.flatMap(entry => {
@@ -2178,9 +2215,13 @@ function archiveNativeSkillsUnlocked(inventory: NativeSkillEntry[], options: Cod
     const expected = adapter && entry.bridgeHome ? canonicalAgentPath(join(nativeAgentRoot(entry.bridgeHome, entry.agent as IntegrationAgent), CLI_BRIDGE_NAME), aliases) : undefined;
     if (!expected || treeHash(entry.path) !== entry.hash || !isOwnedCliBridge(entry.path, [expected])) throw new Error(`Skills bridge changed after planning: ${entry.path}`);
   }
+  assertNoUnprovenCuaArchive(inventory, options);
   const selected = options.targetManifest
     ? selectNativeMigrationTargets(inventory, options.targetManifest)
     : inventory.filter(entry => !entry.bridge && !entry.system && !entry.allowed && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
+  // Defense in depth: a caller-provided inventory cannot slip an allowed copy
+  // into the moves after selection.
+  if (selected.some(entry => entry.allowed)) throw new Error("An allowed native skill copy cannot be archived; remove its recorded review first");
   for (const entry of selected) if (treeHash(entry.path) !== entry.hash) throw new Error(`Native skill changed after planning: ${entry.path}`);
   const targetManifest = options.targetManifest ? { schema: options.targetManifest.schema, digest: options.targetManifest.digest, targetCount: options.targetManifest.targets.length } : undefined;
   if (!selected.length) return { entries: [], ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}), ...fallback };
@@ -2831,9 +2872,15 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
   }
   // Only the exact reviewed Cua driver identity is exempt from the native-copy
   // refusal. Planning supplies the allowance it is about to record; every
-  // later guard reads the recorded policy row back. Both are normalized
-  // against this home, so a row for another path, agent or shape is ignored.
-  const allowances = normalizeNativeSkillAllowances([...(Array.isArray(binding.nativeSkillAllowances) ? binding.nativeSkillAllowances : []), ...(options.nativeSkillAllowances ?? [])], { home, canonical: path => canonicalAgentPath(path, aliases) });
+  // later guard reads the recorded policy row back. Normalize each source
+  // separately, then let the plan's prospective row replace the saved row for
+  // the same canonical path: an explicit re-review must be able to move the
+  // pin forward while the old policy row is still on disk, and an identical
+  // duplicate must not read as an ambiguous second identity.
+  const canonicalAllowancePath = (path: string) => canonicalAgentPath(path, aliases);
+  const policyAllowances = normalizeNativeSkillAllowances(binding.nativeSkillAllowances, { home, canonical: canonicalAllowancePath });
+  const plannedAllowances = normalizeNativeSkillAllowances(options.nativeSkillAllowances, { home, canonical: canonicalAllowancePath });
+  const allowances = plannedAllowances.length ? plannedAllowances : policyAllowances;
   const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0, nativeSkillAllowances: allowances, disabledVendorPaths: agent === "codex" ? disabledCodexSkillPaths(codexConfig, aliases) : [], disabledVendorSkill: entry => !vendorOnlyCacheCopy(entry) && disabledPlugin(entry), codexInstallationInputRoots: installationInputRoots });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !entry.allowed && !disabledVendorSkill(entry));
   // Codex native policy adapter: consulted only when a Codex hook supplied native
@@ -2883,7 +2930,9 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     const staleCua = cua ? blocking.find(entry => entry.agent === CUA_DRIVER_NATIVE_ALLOWANCE.agent && entry.path === cua.path) : undefined;
     const reviewedCua = staleCua ? allowances.find(item => item.path === cua!.path) : undefined;
     const allowanceNote = staleCua
-      ? ` The Cua driver skill at this exact path is a supported allowance, but its content no longer matches${reviewedCua ? ` the reviewed ${reviewedCua.treeSha256} (found ${staleCua.hash})` : " any reviewed allowance"}; do not archive it. After reviewing the Cua update, record the current content with skills hook install --agent claude --review-cua-driver-skill --apply, or restore the reviewed bytes.`
+      ? reviewedCua
+        ? ` The Cua driver skill at this exact path is a supported allowance, but its content no longer matches the reviewed ${reviewedCua.treeSha256} (found ${staleCua.hash}); do not archive it. After reviewing the Cua update, record the current content with skills hook install --agent claude --review-cua-driver-skill --apply, or restore the reviewed bytes.`
+        : ` The Cua driver skill at this exact path is a supported allowance with no recorded review yet; do not archive it. If it is an exact, link-free copy of the Cua app target, review it with skills hook install --agent claude --review-cua-driver-skill --apply.`
       : "";
     const message = `NATIVE_SKILL_DRIFT: ${blocking.length} unexpected native skill copies were found: ${nativeSkillPathList(blocking.map(entry => entry.path))}. ${remediation}${allowanceNote}${adapterRefusal ? ` Native policy adapter refused: ${adapterRefusal}` : ""}`;
     // Live hooks: a copy that can resolve under the bridge's own name (a

@@ -174,15 +174,18 @@ The one supported native skill exception is the Cua Driver skill the Cua app
 installs at `~/.claude/skills/cua-driver`. Claude hook installation accepts it
 when it is the exact canonical directory, a link-free tree, byte-identical to
 the Cua app's own target at `~/.cua-driver/skills/cua-driver`, and its
-`SKILL.md` declares the `cua-driver` name. The plan and JSON receipt name the
-allowance, the inventory row is marked `allowed`, and the Claude bridge stays
-enabled. `migrate native` reports the same row as allowed and never selects it
-for archiving. A Cua update that changes the bytes is drift until it is
-explicitly re-reviewed with `skills hook install --agent claude
---review-cua-driver-skill --apply`, or the reviewed bytes are restored. The
-tradeoff is one reviewed digest per content version instead of a path rule that
-would silently accept any future content; every other unmanaged copy and every
-symlink still refuses.
+`SKILL.md` declares the `cua-driver` name. The first plan that observes the
+exact pair is the review: it records the digest in the plan and policy instead
+of skipping the copy silently, and the JSON receipt names it. The inventory row
+is marked `allowed`, and the Claude bridge stays enabled. `migrate native`
+reports the same row as allowed and never selects it for archiving, including
+through an exact `--target-manifest`; a broad `--apply` also refuses while the
+agent policy is absent or unreadable, because the allowance cannot then be proven. A Cua
+update that changes the bytes is drift until it is explicitly re-reviewed with
+`skills hook install --agent claude --review-cua-driver-skill --apply`, or the
+reviewed bytes are restored. The tradeoff is one reviewed digest per content
+version instead of a path rule that would silently accept any future content;
+every other unmanaged copy and every symlink still refuses.
 
 Claude hook installation sets `syncClaudeAiSkills: false` in user settings to
 stop [account skill synchronization](https://code.claude.com/docs/en/skills#skills-synced-from-claudeai)
