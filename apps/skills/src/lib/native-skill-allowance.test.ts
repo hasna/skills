@@ -178,6 +178,11 @@ test("the exact .agents link is one reviewed identity, resolved to the canonical
   expect(archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true }).entries).toEqual([]);
   expect(existsSync(join(f.source, "SKILL.md"))).toBe(true);
 
+  // The same root is reachable through the home project-ancestor enumeration;
+  // the reviewed link is still one inventory row, never a duplicate.
+  const projected = inventoryNativeSkills(f.home, { agents: ["codex"], projectDir: f.home, nativeSkillAllowances: policy.bridge.nativeSkillAllowances });
+  expect(projected.filter(item => item.path === link)).toHaveLength(1);
+
   // A plain re-plan keeps accepting both identities without a second review.
   const replanned = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] });
   expect(replanned.changes).toEqual([]);

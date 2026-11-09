@@ -487,10 +487,12 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     // tree; every other symlink component keeps refusing below.
     const allowanceTarget = cuaTargets.find(target => target.agent === agent && target.path === path);
     if (allowanceTarget && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      if (seen.has(path)) return { ...scan, hasSkills: true };
       const hash = cuaDriverRootDigest(path, allowanceTarget.source, true);
       if (hash === undefined) throw new Error(`Refusing symlink path: ${path}`);
       const allowed = matchingNativeSkillAllowance({ agent, path, hash, managed: false, vendor: false }, allowedNativeSkills);
       if (!allowed && cuaUnproven?.has(`${agent}\0${path}`)) {
+        seen.add(path);
         entries.push({ agent, path, hash, managed: false, vendor: false, allowanceUnknown: true, ...(agent === "codex" ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}) });
         return { ...scan, hasSkills: true };
       }
