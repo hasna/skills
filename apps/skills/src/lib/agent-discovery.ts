@@ -1105,7 +1105,11 @@ function hooksAreManagedBridge(agent: "gemini" | "cursor", hooks: unknown, manag
   if (!table(hooks) || typeof managed.command !== "string" || !isAbsolute(managed.command)) return false;
   const events = agent === "gemini" ? ["BeforeAgent", "SessionStart", "BeforeTool"] : ["beforeSubmitPrompt", "sessionStart"];
   for (const [event, entries] of Object.entries(hooks)) {
-    if (!events.includes(event) || !Array.isArray(entries) || entries.length !== 1) return false;
+    if (!events.includes(event) || !Array.isArray(entries)) return false;
+    // An event with an empty list registers no handler and can inject nothing;
+    // only actual entries need the managed bridge identity.
+    if (entries.length === 0) continue;
+    if (entries.length !== 1) return false;
     let expected: string;
     try { expected = renderAgentHookCommand(managed.command, agent, managed.profile, event); } catch { return false; }
     const entry = entries[0];

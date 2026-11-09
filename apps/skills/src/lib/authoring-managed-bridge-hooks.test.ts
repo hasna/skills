@@ -61,6 +61,14 @@ test("a subset of the managed entries is still only the bridge", () => {
   allowed(station(home => ({ BeforeAgent: [entry(managed(home, "BeforeAgent"))] })));
 });
 
+test("empty event lists register no handler and add no opaque hook", () => {
+  allowed(station(() => ({ BeforeAgent: [], SessionStart: [], BeforeTool: [] })));
+  allowed(station(home => ({ BeforeAgent: [], SessionStart: [entry(managed(home, "SessionStart"))] })));
+  // An unknown event name stays refused even when its list is empty: the shape
+  // is not one this adapter can enumerate.
+  refused(station(() => ({ AfterAgent: [] })));
+});
+
 test("anything beside or instead of the managed entries keeps refusing", () => {
   const variants: Array<(home: string) => unknown> = [
     // an extra command in a managed entry, or an extra entry for an event
@@ -120,6 +128,11 @@ test("the Skills bridge hooks hook install writes for Cursor add no opaque hook"
   expect(() => assertPortableAuthoringPath(join(f.rootDir, name), f)).not.toThrow();
   scaffoldPortableSkill(name, { ...f, kind: "instruction" });
   expect(prepareSkill(name, { ...f, version: "0.1.1", dryRun: true }).written).toBe(false);
+});
+
+test("empty Cursor event lists register no handler and add no opaque hook", () => {
+  const f = cursorStation(() => ({ beforeSubmitPrompt: [], sessionStart: [] }));
+  expect(() => assertPortableAuthoringPath(join(f.rootDir, name), f)).not.toThrow();
 });
 
 test("anything beside or instead of the Cursor bridge entries keeps refusing", () => {
