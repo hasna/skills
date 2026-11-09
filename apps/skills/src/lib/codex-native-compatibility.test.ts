@@ -163,18 +163,19 @@ test("exact 0.165.0 contract admits native catalog and stored review evidence wi
   }
 });
 
-test("exact 0.166.0 contract admits native catalog and stored review evidence without admitting adjacent releases", () => {
-  expect(capabilities("codex-cli 0.166.0")).toEqual(capabilities("codex-cli 0.165.0"));
-  expect(capabilities("codex-cli 0.166.0")).toEqual(["hooks", "qualified-skill-catalog", "installed-plugin-review"]);
-  expect(SUPPORTED_CODEX_HOOK_VERSIONS.at(-1)).toBe("codex-cli 0.166.0");
-  expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.166.0", "codex-cli 0.166.0"))).not.toThrow();
-  expect(() => assertAgentPolicyCollections(inactivePolicy("codex-cli 0.166.0"))).not.toThrow();
-  for (const previous of ["codex-cli 0.163.0", "codex-cli 0.164.0", "codex-cli 0.165.0"]) {
-    expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.166.0", previous))).toThrow("bounds are invalid");
-    expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.166.0"))).toThrow("bounds are invalid");
+test("exact 0.167.0 contract admits native catalog and stored review evidence without admitting adjacent releases", () => {
+  expect(capabilities("codex-cli 0.167.0")).toEqual(capabilities("codex-cli 0.166.0"));
+  expect(capabilities("codex-cli 0.167.0")).toEqual(["hooks", "qualified-skill-catalog", "installed-plugin-review"]);
+  expect(SUPPORTED_CODEX_HOOK_VERSIONS.at(-1)).toBe("codex-cli 0.167.0");
+  expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.167.0", "codex-cli 0.167.0"))).not.toThrow();
+  expect(() => assertAgentPolicyCollections(inactivePolicy("codex-cli 0.167.0"))).not.toThrow();
+  for (const previous of ["codex-cli 0.164.0", "codex-cli 0.165.0", "codex-cli 0.166.0"]) {
+    expect(() => assertAgentPolicyCollections(installationPolicy("codex-cli 0.167.0", previous))).toThrow("bounds are invalid");
+    expect(() => assertAgentPolicyCollections(installationPolicy(previous, "codex-cli 0.167.0"))).toThrow("bounds are invalid");
   }
-  for (const version of ["codex-cli 0.166.1", "codex-cli 0.167.1", "codex-cli 0.165.1", "codex-cli 0.166.0-alpha.1", "codex-cli 0.166.0-rc.1", "codex-cli 0.166.0+build.1",
-    "codex-cli >=0.166.0", "codex-cli ^0.166.0", "codex-cli 0.166", "codex-cli 0.166.00", "codex-cli v0.166.0", "0.166.0", "codex-cli 0.166.0 "]) {
+  for (const version of ["codex-cli 0.167.1", "codex-cli 0.166.1", "codex-cli 0.165.1",
+    "codex-cli 0.167.0-alpha.1", "codex-cli 0.167.0-rc.1", "codex-cli 0.167.0+build.1",
+    "codex-cli >=0.167.0", "codex-cli ^0.167.0", "codex-cli 0.167", "codex-cli 0.167.00", "codex-cli v0.167.0", "0.167.0", "codex-cli 0.167.0 "]) {
     expect({ version, capabilities: capabilities(version) }).toEqual({ version, capabilities: [] });
     expect((SUPPORTED_CODEX_HOOK_VERSIONS as readonly string[]).includes(version)).toBe(false);
     expect(() => assertAgentPolicyCollections(installationPolicy(version, version))).toThrow("bounds are invalid");
