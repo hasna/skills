@@ -37,7 +37,7 @@ import { directAliasTarget, snapshot as hookFileSnapshot, trustedAncestorOwner, 
 import { assertPinnedLauncherRuntimeSafe, resolveLauncherCommand } from "../cli/commands/runtime-launcher.js";
 import { linuxAccessAclAbsent, withGlibcAclProbe } from "./linux-access-acl.js";
 import { planReviewArtifactRetention, verifyRetainedReviewArtifact, verifyReviewArtifactOriginal, writeReviewArtifactExclusive, type ReviewArtifactChange } from "./retained-review-artifacts.js";
-import { buildCuaDriverNativeAllowance, cuaDriverNativePaths, CUA_DRIVER_NATIVE_ALLOWANCE, isCuaDriverSkillDocument, matchingNativeSkillAllowance, normalizeNativeSkillAllowances, type NativeSkillAllowance } from "./native-skill-allowance.js";
+import { buildCuaDriverNativeAllowance, cuaDriverNativePaths, cuaDriverNativeTargets, CUA_DRIVER_NATIVE_ALLOWANCE, isCuaDriverSkillDocument, matchingNativeSkillAllowance, normalizeNativeSkillAllowances, type NativeSkillAllowance } from "./native-skill-allowance.js";
 
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type { NativeSkillAllowance } from "./native-skill-allowance.js";
@@ -285,23 +285,50 @@ function cuaTreeModesEqual(left: string, right: string): boolean {
   try { return JSON.stringify(modes(left)) === JSON.stringify(modes(right)); } catch { return false; }
 }
 
-/** Capture the exact reviewed Cua driver identity, or undefined when the
- * canonical pair is absent or does not match. Both directories must be real
- * trees (treeHash refuses any link), byte-identical to each other, and the
- * Claude-side SKILL.md must declare the Cua driver name. Nothing is written
- * here; the caller records the returned row in the policy and plan. A copy
+/** Digest of one reviewed Cua driver root, or undefined when it is not the
+ * exact canonical identity. The Claude root must be a real link-free tree. The
+ * `.agents` root may additionally be a one-hop symlink whose lexical target is
+ * the canonical Cua app target; the target itself must be a real link-free
+ * tree, so the link cannot redirect discovery. Every other link is refused. */
+function cuaDriverRootDigest(path: string, source: string, allowExactLink: boolean): string | undefined {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return undefined;
+  if (stat.isSymbolicLink()) {
+    if (!allowExactLink) return undefined;
+    if (resolve(dirname(path), readlinkSync(path)) !== source) return undefined;
+    if (!lstatSync(source, { throwIfNoEntry: false })?.isDirectory()) return undefined;
+    return treeHash(source);
+  }
+  if (!stat.isDirectory()) return undefined;
+  assertSafePath(path);
+  const digest = treeHash(path);
+  if (digest !== treeHash(source) || !cuaTreeModesEqual(path, source)) return undefined;
+  return digest;
+}
+
+/** Capture the exact reviewed Cua driver identities, empty when no canonical
+ * root is present or they do not match. Every captured root must carry the
+ * source tree's exact bytes and declare the Cua driver name. Nothing is written
+ * here; the caller records the returned rows in the policy and plan. A copy
  * that changed after its last review therefore produces no fresh allowance and
  * stays visible drift until it is explicitly re-reviewed. */
-function captureCuaDriverSkillAllowance(home: string, aliases: AgentRootAlias[]): NativeSkillAllowance | undefined {
-  const canonical = (path: string) => canonicalAgentPath(path, aliases), { path, source } = cuaDriverNativePaths({ home, canonical });
+function captureCuaDriverSkillAllowances(home: string, aliases: AgentRootAlias[]): NativeSkillAllowance[] {
+  const canonical = (path: string) => canonicalAgentPath(path, aliases), { source } = cuaDriverNativePaths({ home, canonical });
   try {
-    assertSafePath(path); assertSafePath(source);
-    if (!lstatSync(path, { throwIfNoEntry: false })?.isDirectory() || !lstatSync(source, { throwIfNoEntry: false })?.isDirectory()) return undefined;
-    const digest = treeHash(path);
-    if (digest !== treeHash(source) || !cuaTreeModesEqual(path, source)) return undefined;
-    if (!isCuaDriverSkillDocument(readNativeBytes(join(path, "SKILL.md"), 1024 * 1024).toString("utf8"))) return undefined;
-    return buildCuaDriverNativeAllowance({ home, canonical }, digest);
-  } catch { return undefined; }
+    assertSafePath(source);
+    if (!lstatSync(source, { throwIfNoEntry: false })?.isDirectory()) return [];
+    const sourceDigest = treeHash(source);
+    const rows: NativeSkillAllowance[] = [];
+    for (const target of cuaDriverNativeTargets({ home, canonical })) {
+      if (cuaDriverRootDigest(target.path, source, target.agent === "codex") !== sourceDigest) continue;
+      // Reading through the exact link is refused by the native reader, and the
+      // bytes are bound to the target anyway; check the document where it lives.
+      const documentRoot = lstatSync(target.path)?.isSymbolicLink() ? source : target.path;
+      if (!isCuaDriverSkillDocument(readNativeBytes(join(documentRoot, "SKILL.md"), 1024 * 1024).toString("utf8"))) continue;
+      rows.push(buildCuaDriverNativeAllowance({ home, canonical }, sourceDigest, target.agent));
+    }
+    return rows;
+  } catch { return []; }
 }
 
 /** Parse the reviewed exact-target binding used by native migration. Paths are
@@ -397,9 +424,10 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   const aliases = rootAliases(home, options.allowRootAliases);
   const allowedNativeSkills = normalizeNativeSkillAllowances(options.nativeSkillAllowances, { home, canonical: path => canonicalAgentPath(path, aliases) });
   // When the policy gives no proof (absent or unreadable), the canonical Cua
-  // entry is marked so a broad archive refuses it instead of treating it as an
-  // unmanaged copy.
-  const cuaPath = options.nativeSkillAllowancePolicyUnproven ? cuaDriverNativePaths({ home, canonical: path => canonicalAgentPath(path, aliases) }).path : undefined;
+  // entries are marked so a broad archive refuses them instead of treating them
+  // as unmanaged copies.
+  const cuaTargets = cuaDriverNativeTargets({ home, canonical: path => canonicalAgentPath(path, aliases) });
+  const cuaUnproven = options.nativeSkillAllowancePolicyUnproven ? new Set(cuaTargets.map(target => `${target.agent}\0${target.path}`)) : undefined;
   const selectedAgents = options.agents ? new Set(options.agents) : undefined;
   const includesAgent = (agent: string) => !selectedAgents || selectedAgents.has(agent as IntegrationAgent);
   const rootDefinitions = (selectedAgents
@@ -453,6 +481,26 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   function visit(agent: string, path: string, vendor = false, depth = 0, pluginCache = false, admitted = false, configuredRoot = false): Scan {
     if (!admitted) admit(path);
     const scan: Scan = { complete: true, hasSkills: false, entries: 1 };
+    // The Cua app may materialize its reviewed driver tree at Codex's
+    // `.agents/skills/cua-driver` as a one-hop symlink to its own canonical
+    // target. That exact pair is one reviewed identity, resolved to the target
+    // tree; every other symlink component keeps refusing below.
+    const allowanceTarget = cuaTargets.find(target => target.agent === agent && target.path === path);
+    if (allowanceTarget && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      if (seen.has(path)) return { ...scan, hasSkills: true };
+      const hash = cuaDriverRootDigest(path, allowanceTarget.source, true);
+      if (hash === undefined) throw new Error(`Refusing symlink path: ${path}`);
+      const allowed = matchingNativeSkillAllowance({ agent, path, hash, managed: false, vendor: false }, allowedNativeSkills);
+      if (!allowed && cuaUnproven?.has(`${agent}\0${path}`)) {
+        seen.add(path);
+        entries.push({ agent, path, hash, managed: false, vendor: false, allowanceUnknown: true, ...(agent === "codex" ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}) });
+        return { ...scan, hasSkills: true };
+      }
+      if (!allowed) throw new Error(`NATIVE_SKILL_DRIFT: the Cua driver skill at ${path} is a symlink to the Cua app target but does not match a reviewed allowance; review it with skills hook install --agent claude --review-cua-driver-skill --apply`);
+      scan.hasSkills = true; seen.add(path);
+      entries.push({ agent, path, hash, managed: false, vendor: false, allowed: { id: allowed.id, treeSha256: allowed.treeSha256 }, ...(agent === "codex" ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}) });
+      return scan;
+    }
     assertSafePath(path);
     if (configuredRoot && agent === "codex" && installationInputs.some(root => path === root || path.startsWith(`${root}${sep}`))) return scan;
     if (!existsSync(path)) return scan;
@@ -471,7 +519,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       // Only the exact reviewed Cua driver identity is marked allowed; every
       // other copy keeps the ordinary unmanaged-copy refusal.
       const allowed = matchingNativeSkillAllowance({ agent, path, hash, managed, vendor, bridge }, allowedNativeSkills);
-      const allowanceUnknown = !allowed && cuaPath !== undefined && agent === CUA_DRIVER_NATIVE_ALLOWANCE.agent && path === cuaPath && !vendor && !bridge;
+      const allowanceUnknown = !allowed && cuaUnproven?.has(`${agent}\0${path}`) === true && !vendor && !bridge;
       entries.push({ agent, path, hash, managed, vendor, ...(allowed ? { allowed: { id: allowed.id, treeSha256: allowed.treeSha256 } } : {}), ...(allowanceUnknown ? { allowanceUnknown: true as const } : {}), ...(agent === "codex" || isCodexSkillDiscoveryInput(path) ? { codexHome: process.env.CODEX_HOME ?? join(home, ".codex") } : {}), ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
     if (depth > (agent === "sumi" ? 32 : vendor ? 32 : 3)) return { ...scan, complete: false };
@@ -680,16 +728,26 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   const priorAllowances = normalizeNativeSkillAllowances(policy.bridge?.nativeSkillAllowances, { home, canonical: path => canonicalAgentPath(path, aliases) });
   let nativeSkillAllowances = priorAllowances;
   if (options.reviewCuaDriverSkill && !options.agents.includes("claude")) throw new Error("--review-cua-driver-skill requires --agent claude");
-  if (options.agents.includes("claude")) {
-    const captured = captureCuaDriverSkillAllowance(home, aliases);
-    const priorCua = priorAllowances.find(item => item.id === CUA_DRIVER_NATIVE_ALLOWANCE.id);
+  if (options.agents.includes("claude") || options.agents.includes("codex")) {
+    const captured = captureCuaDriverSkillAllowances(home, aliases);
+    const priorCua = priorAllowances.filter(item => item.id === CUA_DRIVER_NATIVE_ALLOWANCE.id);
     if (options.reviewCuaDriverSkill) {
-      if (!captured) throw new Error(`NATIVE_SKILL_DRIFT: no exact Cua driver skill pair was found to review (${join(home, ...CUA_DRIVER_NATIVE_ALLOWANCE.relativePath)} and ${join(home, ...CUA_DRIVER_NATIVE_ALLOWANCE.relativeSource)} must be link-free, byte-identical trees with the ${CUA_DRIVER_NATIVE_ALLOWANCE.name} marker); nothing was recorded`);
-      nativeSkillAllowances = [...priorAllowances.filter(item => item.id !== captured.id), captured];
-    } else if (priorCua) {
-      if (captured && captured.treeSha256 !== priorCua.treeSha256) throw new Error(`NATIVE_SKILL_DRIFT: the Cua driver skill changed after its reviewed allowance (reviewed ${priorCua.treeSha256}, found ${captured.treeSha256}). Review the Cua update, then record it with skills hook install --agent claude --review-cua-driver-skill --apply`);
-      nativeSkillAllowances = priorAllowances;
-    } else if (captured) nativeSkillAllowances = [...priorAllowances, captured];
+      if (!captured.some(row => row.agent === "claude")) throw new Error(`NATIVE_SKILL_DRIFT: no exact Cua driver skill pair was found to review (${join(home, ...CUA_DRIVER_NATIVE_ALLOWANCE.relativePath)} must be a link-free tree and ${join(home, ...CUA_DRIVER_NATIVE_ALLOWANCE.relativeSource)} must hold the ${CUA_DRIVER_NATIVE_ALLOWANCE.name} marker); nothing was recorded`);
+      // An explicit re-review replaces the captured identities and leaves a
+      // reviewed row for a root that is not present right now untouched.
+      const capturedAgents = new Set(captured.map(row => row.agent));
+      nativeSkillAllowances = [...priorAllowances.filter(item => item.id !== CUA_DRIVER_NATIVE_ALLOWANCE.id || !capturedAgents.has(item.agent)), ...captured];
+    } else if (priorCua.length) {
+      for (const prior of priorCua) {
+        const fresh = captured.find(row => row.agent === prior.agent);
+        if (fresh && fresh.treeSha256 !== prior.treeSha256) throw new Error(`NATIVE_SKILL_DRIFT: the Cua driver skill changed after its reviewed allowance (reviewed ${prior.treeSha256}, found ${fresh.treeSha256}). Review the Cua update, then record it with skills hook install --agent claude --review-cua-driver-skill --apply`);
+      }
+      // A newly appeared canonical root (the Cua app materializing the
+      // `.agents` link, or the update that adds it) is recorded as its own
+      // reviewed identity; a root already reviewed at the same digest is not
+      // duplicated.
+      nativeSkillAllowances = [...priorAllowances, ...captured.filter(row => !priorCua.some(prior => prior.agent === row.agent && prior.treeSha256 === row.treeSha256))];
+    } else if (captured.length) nativeSkillAllowances = [...priorAllowances, ...captured];
   }
   // A review resolves runtimes through this process's PATH. When that PATH
   // cannot see a runtime the policy already recorded, keep the recorded one
@@ -2926,9 +2984,9 @@ function assertManagedNativeDiscovery(custody: ManagedBridgeCustody, agent: Inte
     const remediation = nativeSkillRemediation(agent, blocking, { cache: vendorCache, config: codexPath, aliases: aliases.length > 0, strict: options.codexPromptHook !== true, automatic: discovery.method === "automatic", toleratedChange: (witnessTolerance?.changes.length ?? 0) > 0, rules: codexConfig.skills?.config, enrolled: entry => (binding.codexPluginSkills ?? []).some((control: CodexPluginSkillControl) => entry.path.startsWith(control.pluginParent + sep)), keepsConfig: rows => { try { const text = readOptional(codexPath) ?? ""; return discoveryTextKeepsWitness(discovery, codexPath, `${text.trimEnd()}${text.trim() ? "\n\n" : ""}${rows.join("\n")}`); } catch { return false; } }, read: path => new TextDecoder("utf-8", { fatal: true }).decode(readNativeBytes(path, 1024 * 1024)) });
     // A stale Cua driver copy is drift, not a migration candidate: name the
     // explicit re-review step so the remedy is never "archive the skill".
-    const cua = agent === "claude" ? cuaDriverNativePaths({ home, canonical: path => canonicalAgentPath(path, aliases) }) : undefined;
-    const staleCua = cua ? blocking.find(entry => entry.agent === CUA_DRIVER_NATIVE_ALLOWANCE.agent && entry.path === cua.path) : undefined;
-    const reviewedCua = staleCua ? allowances.find(item => item.path === cua!.path) : undefined;
+    const cua = cuaDriverNativeTargets({ home, canonical: path => canonicalAgentPath(path, aliases) }).find(target => target.agent === agent);
+    const staleCua = cua ? blocking.find(entry => entry.agent === cua.agent && entry.path === cua.path) : undefined;
+    const reviewedCua = staleCua ? allowances.find(item => item.agent === staleCua.agent && item.path === staleCua.path) : undefined;
     const allowanceNote = staleCua
       ? reviewedCua
         ? ` The Cua driver skill at this exact path is a supported allowance, but its content no longer matches the reviewed ${reviewedCua.treeSha256} (found ${staleCua.hash}); do not archive it. After reviewing the Cua update, record the current content with skills hook install --agent claude --review-cua-driver-skill --apply, or restore the reviewed bytes.`

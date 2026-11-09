@@ -151,6 +151,60 @@ test("a symlinked Cua copy is refused instead of being adopted as the allowance"
   expect(() => planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] })).toThrow(/Unsupported native discovery entry|symlink/i);
 });
 
+/** The Cua app also materializes the reviewed tree at Codex's `.agents` root;
+ * on the fleet it is a one-hop symlink to the app's own canonical target. */
+function writeAgentsLink(home: string, source: string): string {
+  const path = join(home, ".agents", "skills", "cua-driver");
+  mkdirSync(dirname(path), { recursive: true });
+  symlinkSync(source, path, "dir");
+  return path;
+}
+
+test("the exact .agents link is one reviewed identity, resolved to the canonical target", () => {
+  const f = fixture(), link = writeAgentsLink(f.home, f.source);
+  const plan = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] });
+  expect(plan.nativeSkillAllowances).toHaveLength(2);
+  const agentsRow = plan.nativeSkillAllowances!.find(row => row.agent === "codex")!;
+  expect(agentsRow).toMatchObject({ id: "cua-driver", name: "cua-driver", path: link, source: f.source });
+  expect(agentsRow.treeSha256).toBe(plan.nativeSkillAllowances!.find(row => row.agent === "claude")!.treeSha256);
+  applyAgentIntegration(plan);
+  const policy = JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8"));
+  expect(policy.bridge.nativeSkillAllowances).toHaveLength(2);
+
+  // Codex discovery reads the link as the reviewed copy, not as a symlink refusal.
+  const inventory = inventoryNativeSkills(f.home, { agents: ["codex"], nativeSkillAllowances: policy.bridge.nativeSkillAllowances });
+  const entry = inventory.find(item => item.path === link);
+  expect(entry).toMatchObject({ agent: "codex", managed: false, vendor: false, allowed: { id: "cua-driver" } });
+  expect(archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true }).entries).toEqual([]);
+  expect(existsSync(join(f.source, "SKILL.md"))).toBe(true);
+
+  // The same root is reachable through the home project-ancestor enumeration;
+  // the reviewed link is still one inventory row, never a duplicate.
+  const projected = inventoryNativeSkills(f.home, { agents: ["codex"], projectDir: f.home, nativeSkillAllowances: policy.bridge.nativeSkillAllowances });
+  expect(projected.filter(item => item.path === link)).toHaveLength(1);
+
+  // A plain re-plan keeps accepting both identities without a second review.
+  const replanned = planAgentIntegration({ home: f.home, dataDir: f.dataDir, agents: ["claude"] });
+  expect(replanned.changes).toEqual([]);
+  expect(replanned.nativeSkillAllowances).toEqual(plan.nativeSkillAllowances);
+});
+
+test("the .agents root refuses a link to anywhere but the canonical Cua target", () => {
+  const f = fixture();
+  const elsewhere = join(f.home, "other-cua-tree");
+  writeCuaTree(elsewhere);
+  const link = writeAgentsLink(f.home, elsewhere);
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"] })).toThrow(/Refusing symlink path/);
+
+  // The exact link with no recorded review stays a symlink refusal unless the
+  // policy is explicitly unproven, which keeps a broad migration refusing.
+  rmSync(link);
+  const exact = writeAgentsLink(f.home, f.source);
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"] })).toThrow(/Refusing symlink path|does not match a reviewed allowance/);
+  const unproven = inventoryNativeSkills(f.home, { agents: ["codex"], nativeSkillAllowancePolicyUnproven: true });
+  expect(unproven.find(item => item.path === exact)?.allowanceUnknown).toBe(true);
+});
+
 test("a symlink inside the Cua tree still refuses even at the allowed path", () => {
   const f = fixture(), target = join(f.home, "outside-usage.md");
   writeFileSync(target, "Synthetic link target.\n");
