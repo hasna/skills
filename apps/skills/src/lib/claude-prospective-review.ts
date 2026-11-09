@@ -328,12 +328,25 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
   if (!Array.isArray(aliases)) refuse("Skills policy root aliases are invalid");
   try { recheckRootAliases(aliases as AgentRootAlias[]); } catch { refuse("Skills policy root alias changed or is invalid"); }
   const canonical = (path: string) => canonicalAgentPath(path, aliases as AgentRootAlias[]);
+  // Only the aliases the managed policy already recorded and this review just
+  // rechecked may appear in a request; a fresh symlink is never admitted.
+  const claudeAliases = (aliases as AgentRootAlias[]).filter(alias => alias.agent === "claude");
+  /** Accept one native path in its canonical physical form or as the exact
+   * recorded Claude root-alias form of that same canonical path. The alias
+   * identity was rechecked above, so the accepted text names the same object;
+   * any other symlinked path differs from the resolver and refuses. */
+  function reviewedPath(path: unknown, expected: string, name: string): string {
+    abs(path, name);
+    if (canonical(path) !== expected) refuse(`${name} differs from the current resolver and reviewed root alias`);
+    if (path !== expected && !claudeAliases.some(alias => path === alias.alias || path.startsWith(alias.alias + sep))) refuse(`${name} is not the canonical path or a policy-recorded Claude root alias`);
+    return path;
+  }
   const configRoot = canonical(join(request.native.home, ".claude"));
   canonicalDir(configRoot, "Claude config root");
-  if (request.native.configRoot !== configRoot) refuse("Claude config root differs from the current resolver and reviewed root alias");
+  const selectedConfigRoot = reviewedPath(request.native.configRoot, configRoot, "Claude config root");
   const pluginRoot = join(configRoot, "plugins");
   if (process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR) refuse("CLAUDE_CODE_PLUGIN_CACHE_DIR overrides are unsupported by this prospective schema; bind and review the actual cache root first");
-  if (request.native.pluginRoot !== pluginRoot) refuse("Claude plugin root differs from the supported standard plugins directory; Cowork and custom cache roots require a separately bound schema");
+  const selectedPluginRoot = reviewedPath(request.native.pluginRoot, pluginRoot, "Claude plugin root");
   const pluginRootStat = lstatSync(pluginRoot, { throwIfNoEntry: false });
   if (pluginRootStat && (!pluginRootStat.isDirectory() || pluginRootStat.isSymbolicLink())) refuse("Claude plugin root is not a regular directory");
   keys(request.candidate, ["marketplace", "root", "catalogPath", "catalogSha256", "closureSha256", "plugins", ...(hasOwn(request.candidate, "releaseManifest") ? ["releaseManifest"] : []), ...(hasOwn(request.candidate, "functionHooksEnv") ? ["functionHooksEnv"] : []), ...(hasOwn(request.candidate, "settingsMarketplaceSource") ? ["settingsMarketplaceSource"] : [])], "candidate");
@@ -430,10 +443,12 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
     marketplaces: canonical(join(request.native.home, ".claude/plugins/known_marketplaces.json")),
     installedPlugins: canonical(join(request.native.home, ".claude/plugins/installed_plugins.json")),
   };
+  const selectedPaths = {} as Record<keyof typeof expectedPaths, string>;
   for (const name of Object.keys(expectedPaths) as Array<keyof typeof expectedPaths>) {
     const witness = request.preimages[name];
-    if (witness.path !== expectedPaths[name]) refuse(`${name} preimage path is not the selected Claude path`);
-    readWitness(witness.path, witness.sha256, name);
+    selectedPaths[name] = reviewedPath(witness.path, expectedPaths[name], `${name} preimage path`);
+    // Read only the canonical object the accepted representation names.
+    readWitness(expectedPaths[name], witness.sha256, name);
   }
   if (!request.review || request.review.pluginHooks !== "reviewed-no-skill-injection") refuse("an explicit no-skill-injection review is required");
   if (request.skills.discoveryInputs?.version !== 1 || !Array.isArray(request.skills.discoveryInputs.agents) || request.skills.discoveryInputs.agents.length !== 1 || request.skills.discoveryInputs.agents[0]?.agent !== "claude" || request.skills.discoveryInputs.agents[0]?.pluginHooks !== "reviewed-no-skill-injection") refuse("one explicit reviewed Claude discovery binding is required");
@@ -626,27 +641,27 @@ export function reviewClaudeProspectiveCandidate(request: ClaudeProspectiveRevie
 
   assertExemptUnchanged();
   const semanticDocumentsSha256 = sha(canonicalJson({ settings: settingsAfter, knownMarketplaces: marketplacesAfter, installedPlugins: installedAfter }));
-  const exactPreimages = Object.keys(expectedPaths).map(name => ({ name, path: expectedPaths[name as keyof typeof expectedPaths], sha256: request.preimages[name as keyof typeof expectedPaths].sha256 }));
-  const expectedPostStateSha256 = sha(canonicalJson({ paths: expectedPaths, targetSettingsPath: expectedPaths.settings, semanticDocumentsSha256, currentPreimages: exactPreimages }));
-  const operationSha256 = sha(canonicalJson({ scope: request.scope, native: request.native, candidate: request.candidate, paths: expectedPaths,
+  const exactPreimages = Object.keys(expectedPaths).map(name => ({ name, path: selectedPaths[name as keyof typeof expectedPaths], sha256: request.preimages[name as keyof typeof expectedPaths].sha256 }));
+  const expectedPostStateSha256 = sha(canonicalJson({ paths: selectedPaths, targetSettingsPath: selectedPaths.settings, semanticDocumentsSha256, currentPreimages: exactPreimages }));
+  const operationSha256 = sha(canonicalJson({ scope: request.scope, native: request.native, candidate: request.candidate, paths: selectedPaths,
     preimages: exactPreimages, skills: { dataDir: request.skills.dataDir, policySha256: request.skills.policySha256, discoverySha256: request.skills.discoverySha256 }, review: request.review, semanticDocumentsSha256 }));
   return {
     schema: CLAUDE_PROSPECTIVE_REVIEW_SCHEMA, accepted: true, applied: false, scope: request.scope, pluginIds: selectedPluginIds,
-    native: { executablePath: request.native.executable.path, executableTarget: request.native.executable.target, executableVersion: request.native.executable.version, executableSha256: request.native.executable.sha256, configRoot: request.native.configRoot, pluginRoot: request.native.pluginRoot },
+    native: { executablePath: request.native.executable.path, executableTarget: request.native.executable.target, executableVersion: request.native.executable.version, executableSha256: request.native.executable.sha256, configRoot: selectedConfigRoot, pluginRoot: selectedPluginRoot },
     candidate: { marketplace: candidate.marketplace, plugins: selectedPlugins.map(item => ({ plugin: item.plugin, pluginId: item.pluginId, manifestSha256: item.manifestSha256, optionsPatchSha256: sha(canonicalJson(item.optionsPatch)) })), closureSha256: candidate.closureSha256, catalogSha256: candidate.catalogSha256, ...(candidate.releaseManifest ? { releaseManifest: candidate.releaseManifest } : {}) },
-    targetSettingsPath: expectedPaths.settings,
+    targetSettingsPath: selectedPaths.settings,
     skillsDiscoverySha256: request.skills.discoverySha256,
     requestFileSha256,
     semanticDocumentsSha256,
     operationSha256,
     expectedPostStateSha256,
     preimages: [
-      { name: "settings", path: expectedPaths.settings, sha256: request.preimages.settings.sha256 },
-      { name: "user-settings", path: expectedPaths.userSettings, sha256: request.preimages.userSettings.sha256 },
-      { name: "project-settings", path: expectedPaths.projectSettings, sha256: request.preimages.projectSettings.sha256 },
-      { name: "project-settings-local", path: expectedPaths.projectSettingsLocal, sha256: request.preimages.projectSettingsLocal.sha256 },
-      { name: "known-marketplaces", path: expectedPaths.marketplaces, sha256: request.preimages.marketplaces.sha256 },
-      { name: "installed-plugins", path: expectedPaths.installedPlugins, sha256: request.preimages.installedPlugins.sha256 },
+      { name: "settings", path: selectedPaths.settings, sha256: request.preimages.settings.sha256 },
+      { name: "user-settings", path: selectedPaths.userSettings, sha256: request.preimages.userSettings.sha256 },
+      { name: "project-settings", path: selectedPaths.projectSettings, sha256: request.preimages.projectSettings.sha256 },
+      { name: "project-settings-local", path: selectedPaths.projectSettingsLocal, sha256: request.preimages.projectSettingsLocal.sha256 },
+      { name: "known-marketplaces", path: selectedPaths.marketplaces, sha256: request.preimages.marketplaces.sha256 },
+      { name: "installed-plugins", path: selectedPaths.installedPlugins, sha256: request.preimages.installedPlugins.sha256 },
       { name: "skills-policy", path: join(request.skills.dataDir, "agent-policy.json"), sha256: request.skills.policySha256 },
     ],
     ownedDelta: { settingsEnabledPlugins: selectedPluginIds, selectedPluginOptions: selectedOptionPaths, functionHooksEnv: candidate.functionHooksEnv ?? null, knownMarketplace: candidate.marketplace, installedPlugins: selectedPluginIds, unrelatedGraph: "preserved-by-complete-semantic-documents" },

@@ -818,7 +818,13 @@ result; user settings and the registries are never exempt. See
 If your home `.claude` or `.codex` directory intentionally links to another
 directory within your home, add `--allow-root-aliases` to hook installation and
 native migration. The plan records and rechecks the exact link and target;
-links inside skill contents or configuration files remain refused.
+links inside skill contents or configuration files remain refused. The
+read-only `skills hook review-claude-candidate` check takes no extra flag: a
+request may name its native Claude config root, plugin root and preimage files
+either by canonical path or by the exact managed-policy root alias, and the
+receipt echoes the representation the request used. It rechecks the recorded
+alias link and target identity first, accepts no other symlinked spelling, and
+refuses a retargeted alias before any receipt; a plain Claude home is unchanged.
 
 On macOS, the OS-owned `/var`, `/tmp` and `/etc` aliases into `/private` are
 accepted only while their exact targets and protected parent directories verify.

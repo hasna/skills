@@ -376,7 +376,7 @@ export function registerAgentIntegration(parent: Command): void {
   hook.command("review-claude-candidate")
     .requiredOption("--request <file>", "Frozen skills.claude-plugin-prospective-review/v1 JSON request")
     .option("--json", "Return the validation-only receipt as JSON", false)
-    .description("Validate a prospective Claude plugin candidate and current preimages without changing native state; Harnesses must compare native and Skills paths against installed package-owned resolvers before trusting the receipt")
+    .description("Validate a prospective Claude plugin candidate and current preimages without changing native state; a native path may be the canonical root or the exact policy-recorded Claude root alias, with its link and target identity rechecked, and Harnesses must compare native and Skills paths against installed package-owned resolvers before trusting the receipt")
     .action(async (options: { request: string; json: boolean }) => {
       try {
         if (!isAbsolute(options.request)) throw new Error("CLAUDE_CANDIDATE_REVIEW_REFUSED: --request must be an absolute path");

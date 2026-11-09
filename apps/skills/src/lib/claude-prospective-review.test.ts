@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve, join as pathJoin } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCliFixture } from "../cli/cli-build.fixture.js";
-import { applyAgentIntegration, planAgentIntegration } from "./agent-integration.js";
+import { applyAgentIntegration, canonicalAgentPath, planAgentIntegration } from "./agent-integration.js";
 import { assertProjectDiscovery, captureDiscoveryPathSources, CLAUDE_PROJECT_DISCOVERY_KEYS, resolveAgentDiscovery, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { captureClaudeSettingsV4 } from "./claude-settings-witness.js";
 import { captureClaudeProspectiveCandidateClosure, reviewClaudeProspectiveCandidate, CLAUDE_PROSPECTIVE_REVIEW_SCHEMA, type ClaudeProspectiveReviewRequest } from "./claude-prospective-review.js";
@@ -23,7 +23,7 @@ beforeAll(async () => {
 });
 afterAll(() => rmSync(cliScratch, { recursive: true, force: true }));
 
-function fixture(scope: "user" | "project" = "user", existingMarketplace = false, pluginNames = ["demo"], extraMarketplaces?: (home: string) => unknown, mutateKnown?: (rows: Record<string, any>) => void) {
+function fixture(scope: "user" | "project" = "user", existingMarketplace = false, pluginNames = ["demo"], extraMarketplaces?: (home: string) => unknown, mutateKnown?: (rows: Record<string, any>) => void, alias = false) {
   const home = mkdtempSync(join(tmpdir(), "skills-claude-prospective-")); roots.push(home);
   const settings = join(home, ".claude/settings.json"), known = join(home, ".claude/plugins/known_marketplaces.json"), installed = join(home, ".claude/plugins/installed_plugins.json");
   const candidateRoot = join(home, "frozen-candidate");
@@ -63,18 +63,31 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
     }
   }
   put(installed, JSON.stringify({ version: 2, plugins: initialRegistrations }));
+  // An opted-in native home root alias: the real Claude state lives in a
+  // sibling directory and ~/.claude is the exact symlink the guard records.
+  if (alias) {
+    renameSync(join(home, ".claude"), join(home, "claude-target"));
+    symlinkSync("claude-target", join(home, ".claude"), "dir");
+  }
+  const claudeRoot = alias ? join(home, "claude-target") : join(home, ".claude");
   const dataDir = join(home, "skills-data");
-  const options = { home, dataDir, projectDir: home, agents: ["claude" as const], command: "/fixture/skills" };
+  const options = { home, dataDir, projectDir: home, agents: ["claude" as const], command: "/fixture/skills", allowRootAliases: alias };
   applyAgentIntegration(planAgentIntegration(options));
   const baselineBinding = JSON.parse(readFileSync(join(dataDir, "agent-policy.json"), "utf8")).bridge.discovery.claude;
+  // Native capture reads the physical path when the home is an alias: the
+  // package-owned consumers resolve the alias before capturing bytes.
+  const witnessSettings = alias ? join(claudeRoot, "settings.json") : settings;
+  const witnessKnown = alias ? join(claudeRoot, "plugins/known_marketplaces.json") : known;
+  const witnessInstalled = alias ? join(claudeRoot, "plugins/installed_plugins.json") : installed;
   const discoveryInputs: ReviewedDiscoveryInputs = { version: 1, agents: [{
     agent: "claude", roots: baselineBinding.roots, sources: [
-      captureClaudeSettingsV4(settings),
-      ...captureDiscoveryPathSources([projectSettings, projectSettingsLocal, known, installed]),
+      captureClaudeSettingsV4(witnessSettings),
+      ...captureDiscoveryPathSources([projectSettings, projectSettingsLocal, witnessKnown, witnessInstalled]),
     ], pluginHooks: "reviewed-no-skill-injection",
   }] };
   applyAgentIntegration(planAgentIntegration({ ...options, discoveryInputs }));
-  const binding = resolveAgentDiscovery({ home, agent: "claude", reviewed: discoveryInputs });
+  const aliases = JSON.parse(readFileSync(join(dataDir, "agent-policy.json"), "utf8")).bridge.rootAliases ?? [];
+  const binding = resolveAgentDiscovery({ home, agent: "claude", reviewed: discoveryInputs, ...(alias ? { canonical: (path: string) => canonicalAgentPath(path, aliases) } : {}) });
   const nativePath = join(home, "bin/claude"); put(nativePath, "#!/bin/sh\nexit 0\n"); chmodSync(nativePath, 0o700);
   const catalogPath = join(candidateRoot, ".claude-plugin/marketplace.json");
   const candidatePlugins = pluginNames.map(plugin => {
@@ -99,7 +112,7 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
     const pluginId = `${plugin}@fixture-market`, rows = [...installedAfterPlugins[pluginId]];
     const index = rows.findIndex(row => row.scope === scope && (scope === "user" ? row.projectPath === undefined : row.projectPath === projectPath));
     const prior = index < 0 ? undefined : rows[index];
-    const targetRow = { scope, ...(scope === "project" ? { projectPath } : {}), installPath: join(home, `.claude/plugins/cache/fixture-market/${plugin}/1.0.0`), version: "1.0.0",
+    const targetRow = { scope, ...(scope === "project" ? { projectPath } : {}), installPath: join(claudeRoot, `plugins/cache/fixture-market/${plugin}/1.0.0`), version: "1.0.0",
       ...(prior?.installedAt === undefined ? { installedAt: { $generated: "claude-utc-timestamp", field: "installed_plugins.fresh-row.installedAt" } } : { installedAt: prior.installedAt }),
       lastUpdated: prior?.lastUpdated === undefined ? { $generated: "claude-utc-timestamp", field: "installed_plugins.selected-row.lastUpdated" } : { $allowed: [prior.lastUpdated, { $generated: "claude-utc-timestamp", field: "installed_plugins.selected-row.lastUpdated" }] } };
     if (index < 0) rows.push(targetRow); else rows[index] = targetRow;
@@ -109,14 +122,14 @@ function fixture(scope: "user" | "project" = "user", existingMarketplace = false
   const request: ClaudeProspectiveReviewRequest = {
     schema: CLAUDE_PROSPECTIVE_REVIEW_SCHEMA,
     scope: { kind: scope, projectPath },
-    native: { home, configRoot: join(home, ".claude"), pluginRoot: join(home, ".claude/plugins"), executable: { path: nativePath, target: nativePath, version: "2.1.295", sha256: sha(readFileSync(nativePath)) } },
+    native: { home, configRoot: claudeRoot, pluginRoot: join(claudeRoot, "plugins"), executable: { path: nativePath, target: nativePath, version: "2.1.295", sha256: sha(readFileSync(nativePath)) } },
     skills: { dataDir, policySha256: sha(readFileSync(join(dataDir, "agent-policy.json"))), discoverySha256: sha(JSON.stringify(binding)), discoveryInputs },
     candidate: { marketplace: "fixture-market", root: candidateRoot, catalogPath, catalogSha256: sha(readFileSync(catalogPath)), closureSha256: captureClaudeProspectiveCandidateClosure(candidateRoot), plugins: candidatePlugins, functionHooksEnv: "1" },
-    preimages: { settings: { path: targetSettings, sha256: sha(readFileSync(targetSettings)) }, userSettings: { path: settings, sha256: sha(readFileSync(settings)) }, projectSettings: { path: projectSettings, sha256: sha(readFileSync(projectSettings)) }, projectSettingsLocal: { path: projectSettingsLocal, sha256: null }, marketplaces: { path: known, sha256: sha(readFileSync(known)) }, installedPlugins: { path: installed, sha256: sha(readFileSync(installed)) } },
+    preimages: { settings: { path: scope === "project" ? projectSettings : join(claudeRoot, "settings.json"), sha256: sha(readFileSync(targetSettings)) }, userSettings: { path: join(claudeRoot, "settings.json"), sha256: sha(readFileSync(settings)) }, projectSettings: { path: projectSettings, sha256: sha(readFileSync(projectSettings)) }, projectSettingsLocal: { path: projectSettingsLocal, sha256: null }, marketplaces: { path: join(claudeRoot, "plugins/known_marketplaces.json"), sha256: sha(readFileSync(known)) }, installedPlugins: { path: join(claudeRoot, "plugins/installed_plugins.json"), sha256: sha(readFileSync(installed)) } },
     delta: { settingsAfter: targetSettingsAfter, knownMarketplacesAfter: knownAfter, installedPluginsAfter: installedAfter },
     review: { pluginHooks: "reviewed-no-skill-injection" },
   };
-  return { request, settings, projectSettings, candidateRoot, dataDir, known, installed, projectSettingsLocal, home };
+  return { request, settings, projectSettings, candidateRoot, dataDir, known, installed, projectSettingsLocal, home, claudeRoot, aliases };
 }
 
 function refreshRegistryBinding(f: ReturnType<typeof fixture>, registry: Record<string, any>): void {
@@ -1162,4 +1175,131 @@ test("the classifier refuses bytes that change after the preimage check and befo
   } });
   expect(() => review(f.request)).toThrow("CLAUDE_CANDIDATE_REVIEW_REFUSED: projectSettingsLocal preimage changed");
   expect(fired).toBe(true);
+});
+
+// The request may name a native path in its canonical physical form or in the
+// exact Claude root-alias form recorded in the managed policy. Both name the
+// same rechecked object; nothing else is admitted.
+const underAlias = (f: ReturnType<typeof fixture>, path: string) =>
+  path.startsWith(f.claudeRoot + "/") || path === f.claudeRoot ? join(f.home, ".claude") + path.slice(f.claudeRoot.length) : path;
+
+function aliasEntry(f: ReturnType<typeof fixture>) {
+  const entry = f.aliases.find((alias: any) => alias.agent === "claude");
+  expect(entry).toBeDefined();
+  expect(entry.home).toBe(f.home);
+  expect(entry.alias).toBe(join(f.home, ".claude"));
+  expect(entry.target).toBe(f.claudeRoot);
+  return entry;
+}
+
+test("a policy-recorded Claude root alias is accepted with its exact canonical identity", () => {
+  const f = fixture("user", false, ["demo"], undefined, undefined, true);
+  const entry = aliasEntry(f);
+  expect(lstatSync(entry.alias).isSymbolicLink()).toBe(true);
+  const policyBefore = readFileSync(join(f.dataDir, "agent-policy.json"), "utf8");
+
+  // Canonical physical paths remain accepted.
+  expect(review(f.request).accepted).toBe(true);
+
+  // The exact recorded alias form is accepted and echoed in the receipt, so a
+  // consumer that resolves through the alias compares its own paths.
+  f.request.native.configRoot = join(f.home, ".claude");
+  f.request.native.pluginRoot = join(f.home, ".claude/plugins");
+  for (const witness of Object.values(f.request.preimages) as Array<{ path: string }>) witness.path = underAlias(f, witness.path);
+  const receipt = review(f.request);
+  expect(receipt.accepted).toBe(true);
+  expect(receipt.native.configRoot).toBe(join(f.home, ".claude"));
+  expect(receipt.native.pluginRoot).toBe(join(f.home, ".claude/plugins"));
+  expect(receipt.targetSettingsPath).toBe(join(f.home, ".claude/settings.json"));
+  expect(receipt.preimages.find(row => row.name === "settings")!.path).toBe(join(f.home, ".claude/settings.json"));
+  expect(receipt.preimages.find(row => row.name === "user-settings")!.path).toBe(join(f.home, ".claude/settings.json"));
+  expect(receipt.preimages.find(row => row.name === "known-marketplaces")!.path).toBe(join(f.home, ".claude/plugins/known_marketplaces.json"));
+  expect(receipt.preimages.find(row => row.name === "installed-plugins")!.path).toBe(join(f.home, ".claude/plugins/installed_plugins.json"));
+  expect(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).toBe(policyBefore);
+});
+
+test("a forged or retargeted Claude root alias is refused without changing the policy", () => {
+  const f = fixture("user", false, ["demo"], undefined, undefined, true);
+  const policyBefore = readFileSync(join(f.dataDir, "agent-policy.json"), "utf8");
+
+  // An unrecorded symlink to the same physical directory is not a reviewed alias.
+  const other = join(f.home, "other-claude");
+  symlinkSync("claude-target", other, "dir");
+  f.request.native.configRoot = other;
+  expect(() => review(f.request)).toThrow("Claude config root differs from the current resolver and reviewed root alias");
+
+  // A record-bearing suffix under a recorded alias still has to name the exact
+  // expected object; the plugin root is not reused for the config root.
+  f.request.native.configRoot = join(f.home, ".claude");
+  f.request.native.pluginRoot = join(f.home, ".claude/not-plugins");
+  expect(() => review(f.request)).toThrow("Claude plugin root differs from the current resolver and reviewed root alias");
+
+  // The recorded alias is rechecked: repointing it at another directory refuses
+  // even though the request paths and policy bytes are unchanged.
+  f.request.native.pluginRoot = join(f.home, ".claude/plugins");
+  const replacement = join(f.home, "claude-target-replacement");
+  mkdirSync(replacement);
+  unlinkSync(join(f.home, ".claude"));
+  symlinkSync("claude-target-replacement", join(f.home, ".claude"), "dir");
+  expect(() => review(f.request)).toThrow("Skills policy root alias changed or is invalid");
+  expect(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).toBe(policyBefore);
+});
+
+test("an unrecorded alias path in a preimage is refused while canonical paths keep working", () => {
+  const f = fixture("user", false, ["demo"], undefined, undefined, true);
+  const other = join(f.home, "other-claude");
+  symlinkSync("claude-target", other, "dir");
+  f.request.preimages.installedPlugins.path = join(other, "plugins/installed_plugins.json");
+  expect(() => review(f.request)).toThrow("installedPlugins preimage path differs from the current resolver and reviewed root alias");
+  f.request.preimages.installedPlugins.path = join(f.claudeRoot, "plugins/installed_plugins.json");
+  expect(review(f.request).accepted).toBe(true);
+});
+
+test("a plain Claude home still reviews exactly and refuses an unrecorded alias", () => {
+  const f = fixture();
+  expect(f.aliases).toEqual([]);
+  expect(review(f.request).accepted).toBe(true);
+  const aliased = join(f.home, "aliased-claude");
+  symlinkSync(".claude", aliased, "dir");
+  f.request.native.configRoot = aliased;
+  expect(() => review(f.request)).toThrow("Claude config root differs from the current resolver and reviewed root alias");
+  expect(lstatSync(aliased).isSymbolicLink()).toBe(true);
+});
+
+test("review preserves a recorded Cua native-skill allowance and the policy bytes", () => {
+  const f = fixture("user", false, ["demo"], undefined, undefined, true);
+  const policyPath = join(f.dataDir, "agent-policy.json");
+  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  policy.bridge.nativeSkillAllowances = [{
+    id: "cua-driver", agent: "claude", name: "cua-driver",
+    path: join(f.claudeRoot, "skills/cua-driver"),
+    treeSha256: "a".repeat(64), source: join(f.home, ".cua-driver/skills/cua-driver"), sourceTreeSha256: "a".repeat(64),
+  }];
+  put(policyPath, JSON.stringify(policy));
+  f.request.skills.policySha256 = sha(readFileSync(policyPath));
+  const before = readFileSync(policyPath, "utf8");
+  f.request.native.configRoot = join(f.home, ".claude");
+  expect(review(f.request).accepted).toBe(true);
+  expect(readFileSync(policyPath, "utf8")).toBe(before);
+  expect(JSON.parse(before).bridge.nativeSkillAllowances[0].id).toBe("cua-driver");
+});
+
+test("CLI review-claude-candidate accepts an exact recorded Claude root alias", async () => {
+  const f = fixture("user", false, ["demo"], undefined, undefined, true);
+  aliasEntry(f);
+  f.request.native.configRoot = join(f.home, ".claude");
+  f.request.native.pluginRoot = join(f.home, ".claude/plugins");
+  for (const witness of Object.values(f.request.preimages) as Array<{ path: string }>) witness.path = underAlias(f, witness.path);
+  const requestPath = join(cliScratch, `alias-request-${randomUUID()}.json`); writeFileSync(requestPath, JSON.stringify(f.request));
+  const child = Bun.spawn([process.execPath, "--no-env-file", cliBin, "hook", "review-claude-candidate", "--request", requestPath, "--json"], {
+    cwd: f.request.native.home,
+    env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: f.request.native.home, USERPROFILE: f.request.native.home, HASNA_HOME: join(f.request.native.home, ".hasna"), HASNA_SKILLS_DIR: f.dataDir, TMPDIR: cliScratch, NO_COLOR: "1" },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(stderr).toBe(""); expect(status).toBe(0);
+  const receipt = JSON.parse(stdout);
+  expect(receipt.accepted).toBe(true);
+  expect(receipt.native.configRoot).toBe(join(f.home, ".claude"));
+  expect(receipt.preimages.find((row: any) => row.name === "user-settings").path).toBe(join(f.home, ".claude/settings.json"));
 });
