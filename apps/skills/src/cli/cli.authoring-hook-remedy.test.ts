@@ -121,7 +121,7 @@ for (const retained of [true, false]) {
     // These commands accept --discovery-inputs, so their messages name it.
     const install = await s.run(["hook", "install", "--agent", "codex", "--apply", "--json"]);
     expect(install.status).toBe(1);
-    expect(install.output).toContain(retained ? "that review no longer verifies, so a fresh explicit review is required: skills hook install --agent codex --discovery-inputs <review> --apply" : "Native discovery is unresolved (codex: plugin hooks require a separate no-skill-injection review); provide a reviewed --discovery-inputs file");
+    expect(install.output).toContain(retained ? "that review no longer verifies, so a fresh explicit review is required: capture one with skills hook discovery-review --agent codex --output <new-review-file>, then run skills hook install --agent codex --discovery-inputs <new-review-file> --apply" : "Native discovery is unresolved (codex: plugin hooks require a separate no-skill-injection review); provide a reviewed --discovery-inputs file");
     const vendor = await s.run(["migrate", "native", "--agent", "codex", "--project", s.home, "--include-vendor", "--json"]);
     expect([vendor.status, vendor.output.trim()]).toEqual([1, "Native discovery is unresolved (codex: plugin hooks require a separate no-skill-injection review); provide a reviewed --discovery-inputs file"]);
     expect(s.state()).toEqual(before);

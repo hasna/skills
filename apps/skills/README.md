@@ -128,8 +128,10 @@ caches on its own; retire those copies with a Codex `[[skills.config]]` rule
 a name rule only for a copy with no Hasna marker, its remote install receipt, a
 refresh-safe plugin and no rule that enables it. Other checks (`skills hook
 install` reusing a saved review, `skills hook trust`) do not accept a
-hand-added name rule; for them, and for system skills, run `skills hook install
---agent codex --discovery-inputs <file> --apply` with a fresh discovery review
+hand-added name rule; for them, and for system skills, capture a fresh review
+with `skills hook discovery-review --agent codex --output <file>` and run
+`skills hook install
+--agent codex --discovery-inputs <file> --apply` with that fresh discovery review
 (no `--discovery-inputs` on an automatic binding; add a fresh
 `--codex-native-catalog <file>` for a plugin Skills has enrolled), which writes
 and records the disables. Run the same refresh after editing `config.toml` when
@@ -787,6 +789,34 @@ same transaction. A reviewed binding always carries a whole-file witness for the
 agent configuration beside its projected fields, so unchanged projected fields do
 not excuse a change outside them: a fresh explicit discovery review, not a
 witness refresh, is the supported route.
+
+#### Capturing a fresh explicit review
+
+A saved binding is not itself a review input. It contains the resolver's
+automatic configuration projections (`format`/`fields`), while an explicit
+review accepts only full witnesses, so feeding `bridge.discovery.<agent>` back to
+`--discovery-inputs` refuses with `Explicit discovery reviews require full
+source-file hashes`. Capture a new review instead:
+
+```bash
+skills hook discovery-review --agent claude --output /absolute/private/claude-review.json
+skills hook install --agent claude --discovery-inputs /absolute/private/claude-review.json --json
+skills hook install --agent claude --discovery-inputs /absolute/private/claude-review.json --apply --json
+```
+
+`hook discovery-review` is read-only on native state. It re-derives the current
+discovery through the same resolver `hook install` uses, so an unsupported
+plugin control, an unreviewed plugin hook or an unresolved root still refuses
+and is never auto-attested. Each projected configuration source is replaced by
+its typed witness (`claude-settings-v5`, `codex-settings-v8` or
+`sumi-settings-v1`) or exact bytes, and active Claude plugin roots gain a
+directory-membership witness. The command writes a new `0600` file and refuses
+an existing path. Its JSON receipt lists the saved binding's changed, added and
+removed sources, so the operator can inspect what the review adopts before
+running the plan; it changes nothing by itself. Every witness is verified again
+at apply, so a review captured before another change is still refused as stale.
+Use `--allow-root-aliases` on a host whose `~/.claude` or `~/.codex` is the
+recorded managed root alias.
 
 For reviewed Claude plugins, `skills integration plugin plan`, `admit` and
 `resolve` provide a command-source admission boundary before native discovery.

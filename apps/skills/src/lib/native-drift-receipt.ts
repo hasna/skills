@@ -51,7 +51,7 @@ export function boundedDriftReason(message: string, limit = MAX_REASON): string 
 }
 
 export function nativeDriftRepair(agent: string): string {
-  return `skills hook install --agent ${agent} --apply, with --discovery-inputs <reviewed-file> for a reviewed binding`;
+  return `skills hook discovery-review --agent ${agent} --output <new-review-file>, then skills hook install --agent ${agent} --discovery-inputs <new-review-file> --apply`;
 }
 
 /** One visible line: what happened, the bounded drift reason (it names the
