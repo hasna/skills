@@ -180,7 +180,7 @@ function readRootAlias(home: string, agent: IntegrationAgent): AgentRootAlias {
   return { agent, home: realHome, alias, target, link, aliasIdentity: `${stat.dev}:${stat.ino}:${stat.ctimeNs}`, targetIdentity: `${targetStat.dev}:${targetStat.ino}` };
 }
 
-function rootAliases(home: string, allowed = false): AgentRootAlias[] {
+export function rootAliases(home: string, allowed = false): AgentRootAlias[] {
   if (!allowed) return [];
   const result: AgentRootAlias[] = [];
   for (const agent of ["claude", "codex"] as const) if (lstatSync(join(home, `.${agent}`), { throwIfNoEntry: false })?.isSymbolicLink()) result.push(readRootAlias(home, agent));
@@ -722,7 +722,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       // A reused review that no longer verifies cannot be repaired by this command: plain
       // `hook install` re-enters this same assertion, so name the explicit review form.
       if (!retainedReview) throw error;
-      throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message.replace(/^NATIVE_SKILL_DRIFT: /, "")}. This agent reuses a saved discovery review and that review no longer verifies, so a fresh explicit review is required: skills hook install --agent ${agent} --discovery-inputs <review> --apply.`);
+      throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message.replace(/^NATIVE_SKILL_DRIFT: /, "")}. This agent reuses a saved discovery review and that review no longer verifies, so a fresh explicit review is required: capture one with skills hook discovery-review --agent ${agent} --output <new-review-file>, then run skills hook install --agent ${agent} --discovery-inputs <new-review-file> --apply.`);
     }
   });
   const codexConfigBefore = options.agents.includes("codex") ? readOptional(canonicalAgentPath(join(home, ".codex", "config.toml"), aliases)) : null;

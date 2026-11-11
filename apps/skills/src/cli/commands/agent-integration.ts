@@ -8,12 +8,12 @@ import { existsSync, lstatSync, readFileSync, readSync, writeFileSync } from "no
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
-import { isDiscoveryRootUnresolved, captureDiscoveryExecutableSources, type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
+import { isDiscoveryRootUnresolved, captureDiscoveryExecutableSources, discoveryExecutable, type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { detectedIntegrationAgents } from "../../lib/agent-install-selection.js";
-import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, isAgentSubmittedPrompt, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, planClaudeManagedHookProjection, planAgentSettingsWitnessUpgrade, planCodexSemanticCacheWitnessUpgrade, planReviewedArtifactMigration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, assertOpenCodeNativeBridge, codexPromptDriftWarning, hookContextOutput, isAgentSubmittedPrompt, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, canonicalAgentPath, rootAliases, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { codexNativeHookEnvelopeFromInput, CODEX_NATIVE_POLICY_FD_ENV } from "../../lib/codex-native-skill-policy.js";
 import { planCodexNativeTrust, applyCodexNativeTrust, previewCodexNativeTrust } from "../../lib/codex-native-trust.js";
@@ -35,6 +35,7 @@ import { codexAdmissionReceipt, type CodexCorpusAdmission } from "../../lib/code
 import { selfSpawnCommand } from "../../lib/self-spawn.js";
 import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
+import { captureDiscoveryReview, assertDiscoveryReviewOutputPath } from "../../lib/discovery-review-capture.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = RECOVERABLE_CACHE_ERRORS;
 /**
@@ -370,6 +371,43 @@ export function registerAgentIntegration(parent: Command): void {
         await writeCliOutput(JSON.stringify(receipt));
       } catch (error) {
         console.error(safeClaudeInstallerCaptureError(error));
+        process.exitCode = 1;
+      }
+    });
+  hook.command("discovery-review")
+    .requiredOption("--agent <agent>", `Agent whose current discovery is captured: ${INTEGRATION_AGENTS.join(", ")}`)
+    .requiredOption("--output <file>", "New private file for the explicit --discovery-inputs review")
+    .option("--allow-root-aliases", "Read the agent home through its recorded root alias, as hook install does", false)
+    .option("--json", "Return the versioned capture receipt as JSON", false)
+    .description("Capture a fresh explicit discovery review from the current native state without changing it; inspect it, then preview and apply skills hook install --discovery-inputs <file>")
+    .action(async (options: { agent: string; output: string; allowRootAliases: boolean; json: boolean }) => {
+      try {
+        if (!INTEGRATION_AGENTS.includes(options.agent as IntegrationAgent)) throw new Error(`Supported agents: ${INTEGRATION_AGENTS.join(", ")}`);
+        const agent = options.agent as IntegrationAgent;
+        const output = assertDiscoveryReviewOutputPath(options.output);
+        if (resolve(output) !== output) throw new Error("DISCOVERY_REVIEW_OUTPUT_ABSOLUTE_REQUIRED: --output must be an absolute path");
+        const home = homedir(), aliases = rootAliases(home, options.allowRootAliases);
+        const policy = readManagedSkillPolicySnapshot(getDataDirReadOnly())?.value as Record<string, any> | undefined;
+        const previous = policy?.bridge?.discovery?.[agent];
+        const capture = captureDiscoveryReview({ home, agent, canonical: path => canonicalAgentPath(path, aliases), previous, executable: discoveryExecutable(agent) });
+        try { writeFileSync(output, capture.reviewText, { flag: "wx", mode: 0o600 }); }
+        catch (error) {
+          if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("DISCOVERY_REVIEW_OUTPUT_EXISTS: --output must name a new file");
+          throw error;
+        }
+        const written = lstatSync(output);
+        if (!written.isFile() || written.isSymbolicLink() || (written.mode & 0o077) !== 0
+          || readFileSync(output, "utf8") !== capture.reviewText) throw new Error("DISCOVERY_REVIEW_READBACK_FAILED");
+        const receipt = {
+          schema: capture.schema, agent, output, sha256: capture.reviewSha256,
+          roots: capture.review.agents[0]!.roots.length, sources: capture.sourceCount, directories: capture.directoryCount,
+          previousMethod: capture.previousMethod, changes: capture.changes, changesTruncated: capture.changesTruncated,
+        };
+        await writeCliOutput(options.json ? JSON.stringify(receipt)
+          : `Captured a fresh ${agent} discovery review (${receipt.sources} source(s), ${receipt.roots} root(s), ${receipt.directories} directory witness(es)) in ${output}. Native state was not changed. Preview with: skills hook install --agent ${agent} --discovery-inputs ${output}; add --apply to install.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "capture failed";
+        console.error(/^DISCOVERY_REVIEW_[A-Z_]+:/.test(message) ? message : `DISCOVERY_REVIEW_CAPTURE_FAILED: ${message}`);
         process.exitCode = 1;
       }
     });
