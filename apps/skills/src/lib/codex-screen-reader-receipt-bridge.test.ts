@@ -121,7 +121,7 @@ describe("the Codex screen-reader receipt keeps existing typed bindings current 
       const config = read(t.config), policy = readFileSync(join(t.dataDir, "agent-policy.json"));
       // Retained-review installation names the explicit review form; the live
       // guard above retains its shorter refusal. Both leave original bytes intact.
-      expect(plannedWrite(t)).toBe(`${INPUT(t)}. This agent reuses a saved discovery review and that review no longer verifies, so a fresh explicit review is required: skills hook install --agent codex --discovery-inputs <review> --apply.`);
+      expect(plannedWrite(t)).toBe(`${INPUT(t)}. This agent reuses a saved discovery review and that review no longer verifies, so a fresh explicit review is required: capture one with skills hook discovery-review --agent codex --output <new-review-file>, then run skills hook install --agent codex --discovery-inputs <new-review-file> --apply.`);
       expect(read(t.config)).toBe(config);
       expect(readFileSync(join(t.dataDir, "agent-policy.json")).equals(policy)).toBe(true);
     }

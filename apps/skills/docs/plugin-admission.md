@@ -881,9 +881,14 @@ skills hook witness --kind claude-settings-v2 --path /canonical/home/.claude/set
 skills hook witness --kind claude-marketplace-registry-v2 --path /canonical/home/.claude/plugins/known_marketplaces.json --json
 ```
 
-Capture does not install or authorize a review. Compare the current complete
-configuration with its previous review, put the chosen witness in the reviewed
-discovery inputs, and preview `skills hook install --discovery-inputs <file>`
+Capture does not install or authorize a review. To refresh the whole explicit
+review after a settings or plugin change, capture the current native state with
+`skills hook discovery-review --agent claude --output <file>`; it replaces the
+automatic configuration projections with typed or full witnesses and never
+attests an unreviewed plugin hook or unsupported control by itself. Otherwise,
+compare the current complete configuration with its previous review, put the
+chosen witness in the reviewed discovery inputs, and preview
+`skills hook install --discovery-inputs <file>`
 before applying. Existing byte and v1 witnesses are never silently converted.
 Runtime support for the selected witness version must be installed before
 policy activation. A real hook installation is a configuration change, not a

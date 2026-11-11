@@ -1528,7 +1528,8 @@ function resolveDiscovery(options: DiscoveryOptions, exclusion?: { retained?: Ag
   if (review) {
     if (review.pluginHooks !== "reviewed-no-skill-injection" || !Array.isArray(review.sources) || !review.sources.length || !Array.isArray(review.roots)) throw new Error("Discovery review must bind sources and confirm plugin hooks do not inject retired skills");
     const supplied = { agent, roots: review.roots, sources: review.sources, ...(review.directories !== undefined ? { directories: review.directories } : {}), method: "reviewed" as const };
-    if (review.sources.some(source => source.format !== undefined || source.fields !== undefined)) throw new Error("Explicit discovery reviews require full source-file hashes");
+    const projectedSource = review.sources.find(source => source.format !== undefined || source.fields !== undefined);
+    if (projectedSource) throw new Error(`Explicit discovery reviews require full source-file hashes; ${quotedPath(projectedSource.path)} carries automatic configuration projections. Capture a fresh review with skills hook discovery-review --agent ${agent} --output <new-review-file>`);
     verifyAgentDiscovery(supplied);
     if (review.sources.some(source => SEMANTIC_SETTINGS_WITNESS_MODES.has(source.hashMode ?? "") && source.path !== canonical(configPath))) throw new Error("Semantic settings witnesses must name the configured agent configuration source");
     if (!review.sources.some(source => source.path === canonical(configPath))) throw new Error("Discovery review must include the agent configuration source");
