@@ -440,7 +440,8 @@ test("the time limit kills the todos call's whole process group, grandchildren i
   const script = join(root, "group.sh"), pidFile = join(root, "grandchild.pid");
   writeFileSync(script, `#!/bin/sh\nsleep 30 &\necho $! > ${pidFile}\nsleep 30\n`); chmodSync(script, 0o700);
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  expect((await runTodosChild(script, [], undefined, { PATH: "/usr/bin:/bin" }, 500)).timedOut).toBe(true);
+  // Long enough for a freshly written script to start and record its grandchild (macOS can take ~1 s on first run).
+  expect((await runTodosChild(script, [], undefined, { PATH: "/usr/bin:/bin" }, 3_000)).timedOut).toBe(true);
   const grandchild = Number(readFileSync(pidFile, "utf8").trim());
   await Bun.sleep(200);
   expect(alive(grandchild)).toBe(false);
