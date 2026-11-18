@@ -411,9 +411,43 @@ test("the description writes the home folder as ~ and cuts the reason", () => {
   expect(withHomeAsTilde("/Users/andrei/.claude/settings.json and /Users/andrei", "/Users/andrei")).toBe("~/.claude/settings.json and ~");
   expect(withHomeAsTilde("/Users/andreiX/file and /Users/andrei/f", "/Users/andrei/")).toBe("/Users/andreiX/file and ~/f");
   expect(withHomeAsTilde("/a/b", "/")).toBe("/a/b");
+  expect(withHomeAsTilde("/a/b", "//")).toBe("/a/b");
   const receipt = { agent: "claude", status: "active" as const, event: "UserPromptSubmit", reason: "r", reasonSha256: "a".repeat(64), repair: "x", firstSeenAt: "2026-11-18T10:00:00.000Z", lastSeenAt: "2026-11-18T10:00:00.000Z", occurrences: 1, path: "/Users/andrei/.hasna/skills/native-drift/claude.json" };
   const text = driftReportDescription("st", receipt, "drift at /Users/andrei/.claude/settings.json", "/Users/andrei");
   expect(text).toContain("- Reason: drift at ~/.claude/settings.json");
   expect(text).toContain("- Receipt: ~/.hasna/skills/native-drift/claude.json");
   expect(text).not.toContain("/Users/andrei");
+});
+
+test("the filed description holds at most 300 reason characters, with the home folder already written as ~", async () => {
+  const s = station();
+  const todos = fakeTodos(s.root);
+  Object.assign(s.env, { HASNA_SKILLS_DRIFT_REPORT_PROJECT: PROJECT, HASNA_SKILLS_DRIFT_REPORT_ASSIGNEE: "skills-owner", HASNA_SKILLS_DRIFT_REPORT_TODOS_BIN: todos.bin });
+  // The home folder starts at character 290, so a cut after redaction must not leave part of it.
+  const message = `NATIVE_SKILL_DRIFT: ${"x".repeat(270)} ${s.root}/.claude/settings.json ${"y".repeat(700)}`;
+  promptWith(s, message);
+  expect(await runNativeDriftReport(s.data, "claude", s.spawned[0]![5]!, { env: s.env })).toMatchObject({ status: "filed" });
+  const [task] = todos.tasks();
+  const reasonLine = (task.description as string).split("\n").find(line => line.startsWith("- Reason: "))!;
+  expect(reasonLine.length - "- Reason: ".length).toBeLessThanOrEqual(300);
+  expect(reasonLine).toContain("~/.claude");
+  expect(task.description).not.toContain(s.root);
+  expect(task.description).not.toContain("y".repeat(50));
+});
+
+test("the time limit kills the todos call's whole process group, grandchildren included", async () => {
+  const root = scratch();
+  const script = join(root, "group.sh"), pidFile = join(root, "grandchild.pid");
+  writeFileSync(script, `#!/bin/sh\nsleep 30 &\necho $! > ${pidFile}\nsleep 30\n`); chmodSync(script, 0o700);
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  expect((await runTodosChild(script, [], undefined, { PATH: "/usr/bin:/bin" }, 500)).timedOut).toBe(true);
+  const grandchild = Number(readFileSync(pidFile, "utf8").trim());
+  await Bun.sleep(200);
+  expect(alive(grandchild)).toBe(false);
+  // A child that exits while its grandchild holds the output open: the group is killed after the grace.
+  writeFileSync(script, `#!/bin/sh\nsleep 30 &\necho $! > ${pidFile}\nexit 0\n`); chmodSync(script, 0o700);
+  expect(await runTodosChild(script, [], undefined, { PATH: "/usr/bin:/bin" }, 20_000)).toMatchObject({ exitCode: 0, timedOut: false });
+  const held = Number(readFileSync(pidFile, "utf8").trim());
+  await Bun.sleep(200);
+  expect(alive(held)).toBe(false);
 });

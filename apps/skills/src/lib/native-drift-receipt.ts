@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { driftReasonKeySha256, parseNativeDriftReport, planNativeDriftReport, runDriftReportWorker, type DriftReportOptions, type DriftReportRun, type DriftReportWorkerOptions, type NativeDriftReport } from "./native-drift-report.js";
+import { DRIFT_REPORT_REASON_CHARS, driftReasonKeySha256, parseNativeDriftReport, planNativeDriftReport, runDriftReportWorker, type DriftReportOptions, type DriftReportRun, type DriftReportWorkerOptions, type NativeDriftReport } from "./native-drift-report.js";
 
 export type { NativeDriftReport, NativeDriftReportStatus } from "./native-drift-report.js";
 
@@ -221,7 +221,7 @@ export async function runNativeDriftReport(dataDir: string, agent: string, opera
   const result = await runDriftReportWorker(dataDir, agent, operationId, () => {
     const receipt = readReceipt(path);
     return receipt ? { ...receipt, path } : null;
-  }, { boundReason: reason => boundedDriftReason(reason, MAX_WARNING_REASON), ...options });
+  }, { boundReason: reason => boundedDriftReason(reason, DRIFT_REPORT_REASON_CHARS), ...options });
   if (result.report && result.episode) {
     try {
       const current = readReceipt(path);

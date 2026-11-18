@@ -591,6 +591,7 @@ export function driftReportTitle(station: string, agent: string, reasonKeySha256
 export function withHomeAsTilde(text: string, home: string | undefined): string {
   if (!home || !isAbsolute(home) || home === "/") return text;
   const trimmed = home.replace(/\/+$/, "");
+  if (!trimmed) return text;
   // Only the folder itself, never a sibling that shares its prefix (/Users/a vs /Users/ab).
   const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return text.replace(new RegExp(`${escaped}(?=$|[/\\s'"\`,;:)\\]])`, "g"), "~");
@@ -685,7 +686,9 @@ export async function runDriftReportWorker(dataDir: string, agent: string, opera
     // Only the lock's owner creates: if the lock was taken over, another worker owns this report now.
     const still = readLock(dataDir, agent);
     if (still?.lock?.operationId !== operationId) throw new DriftReportError("DRIFT_REPORT_LOCK_LOST");
-    const reason = (options.boundReason ?? (value => value.slice(0, DRIFT_REPORT_REASON_CHARS)))(receipt.reason);
+    // The home folder is written as `~` first, so a cut can never leave part
+    // of it; the caller's bound (escaping) applies next, and the cap always last.
+    const reason = (options.boundReason ?? (value => value))(withHomeAsTilde(receipt.reason, env.HOME)).slice(0, DRIFT_REPORT_REASON_CHARS);
     // The description travels on stdin, never on argv. The task carries no due date.
     const created = await run(bin, ["--json", "add", driftReportTitle(station, agent, reasonKey), "--project", target.project, "--assign", target.assignee,
       "--tags", DRIFT_REPORT_TAG, "--priority", "high", "--description-file", "-"], driftReportDescription(station, receipt, reason, env.HOME), childEnv, timeoutMs);
