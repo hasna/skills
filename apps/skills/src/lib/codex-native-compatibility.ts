@@ -51,6 +51,16 @@ const MEASURED_CODEX_CAPABILITIES: Readonly<Record<string, readonly CodexNativeC
   // It passed the same native acceptance as 0.165.0. Corpus admission and hook
   // trust stay separately required.
   "codex-cli 0.166.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
+  // codex-cli 0.170.0 (npm @openai/codex-darwin-arm64 binary sha256 9248cfee)
+  // keeps 0.166.0's schemas for every method Skills calls (initialize,
+  // hooks/list, config/read, config/batchWrite, skills/list, plugin/installed)
+  // except: InitializeParams gains an optional capabilities.requiredHumanApproval
+  // that Skills never sends, the effective config gains a nullable
+  // client_search_provider that Skills does not read, and a
+  // PluginInstalledResponse description changes. It passed the native catalog
+  // acceptance. Corpus admission and hook trust stay separately required.
+  // 0.167.x to 0.169.x were not measured and stay unsupported.
+  "codex-cli 0.170.0": ["hooks", "qualified-skill-catalog", "installed-plugin-review"],
 };
 
 /** `installed-plugin-review`: the 0.160 `plugin/installed` source identities and

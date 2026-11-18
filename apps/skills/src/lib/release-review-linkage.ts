@@ -17,7 +17,7 @@
  *
  *   <release notes>
  *
- *   Release-Review-Agent: <registered reviewer coding-agent identity>
+ *   Release-Review-Agent: <address of the session that requested the independent review>
  *   Git-Publishing-Thread: <release intent thread id>
  *   Git-Prs-GO: <message id of the independent GO in git-prs for this candidate>
  *   Packed-SHA256: <64 lowercase hex>
@@ -63,7 +63,7 @@ export type ReleaseReviewLinkageFailure = {
 };
 
 export type ReleaseReviewLinkage = {
-  /** The registered coding-agent identity that performed the independent review. */
+  /** The address of the session that requested the independent review (a fresh subagent of it reviewed). */
   reviewerAgent: string;
   /** Release intent thread in the git-publishing lane. */
   goThreadId: string;
@@ -163,7 +163,7 @@ export function parseReleaseReviewLinkage(tagMessage: string): {
     RELEASE_REVIEW_LINKAGE_FIELDS.reviewerAgent,
     "release-review-linkage-reviewer",
     AGENT_ID,
-    "the registered coding-agent identity that performed the independent review",
+    "the address of the session that requested the independent review",
   );
   linkage.goThreadId = readField(
     RELEASE_REVIEW_LINKAGE_FIELDS.goThreadId,
