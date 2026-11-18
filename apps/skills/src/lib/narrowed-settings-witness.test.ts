@@ -14,7 +14,7 @@ import {
 } from "./codex-settings-witness.js";
 import { NARROWED_WITNESS_LEDGER_FILE, narrowedLegacyWitnessMode, openNarrowedWitnessLedger } from "./narrowed-witness-ledger.js";
 import { assertAgentPolicyCollections } from "./agent-policy-limits.js";
-import { boundedDriftReason, clearNativeDriftReceipt, isNativeSkillDrift, NATIVE_DRIFT_AGENT_NOTICE, NativeSkillPolicyRefusal, nativeDriftFailOpen, nativeDriftWarning, readNativeDriftReceipts, recordNativeDriftReceipt } from "./native-drift-receipt.js";
+import { boundedDriftReason, clearNativeDriftReceipt, isNativeSkillDrift, nativeDriftAgentNotice, NativeSkillPolicyRefusal, nativeDriftFailOpen, nativeDriftWarning, readNativeDriftReceipts, recordNativeDriftReceipt } from "./native-drift-receipt.js";
 import { renderOpenCodePlugin } from "./agent-adapters.js";
 import { renderHermesSupervisor } from "./agent-hermes.js";
 import { renderSumiPlugin } from "./agent-sumi.js";
@@ -636,7 +636,7 @@ console.log(JSON.stringify(readFileSync(${JSON.stringify(mode)}, "utf8") === "re
   expect(event.system).toHaveLength(1);
   expect(event.system[0]!.text).toStartWith("Skills warning: native discovery changed; this prompt was not blocked");
   expect(event.system[0]!.text).toContain("sumi.json");
-  expect(event.system[0]!.text).toContain(NATIVE_DRIFT_AGENT_NOTICE);
+  expect(event.system[0]!.text).toContain(nativeDriftAgentNotice(null));
   expect(readNativeDriftReceipts(data)).toEqual([expect.objectContaining({ agent: "sumi", status: "active", promptBlocked: false })]);
   // The payload-skill guard of the same plugin still refuses under drift.
   expect(() => hooks.get("execute.before")!({ tool: "skill", input: { id: "some-payload" } })).toThrow();

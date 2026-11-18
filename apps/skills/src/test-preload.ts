@@ -235,6 +235,10 @@ export function withoutFleetCredentialEnv<T extends Record<string, string | unde
 
 for (const key of FLEET_CREDENTIAL_ENV_VARS) delete process.env[key];
 process.env["HASNA_STATION"] = NO_KEYCHAIN_ACCOUNT;
+// A station's native drift report target must never make a test's drift hook
+// start a real report worker that runs the station's todos CLI. Tests that
+// exercise the report set these explicitly.
+for (const key of ["HASNA_SKILLS_DRIFT_REPORT_PROJECT", "HASNA_SKILLS_DRIFT_REPORT_ASSIGNEE", "HASNA_SKILLS_DRIFT_REPORT_TODOS_BIN"]) delete process.env[key];
 // Server fixtures that exercise storage, routing or HTTP behavior need an
 // explicit synthetic public authority. Never inherit an operator's production
 // server setting; individual missing-authority tests override this with "".

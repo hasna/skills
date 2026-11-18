@@ -22,7 +22,7 @@ import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib
 import { MANAGED_HOOK_DEADLINE_MS, managedContextChildLimits, sessionStartSyncBudget, takeSessionPinMigrationNotice } from "../../lib/session-reconciliation.js";
 import { captureClaudeSettingsV2, captureClaudeSettingsV3, captureClaudeSettingsV4, captureClaudeSettingsV5 } from "../../lib/claude-settings-witness.js";
 import { captureCodexSettings, captureCodexSettingsV2, captureCodexSettingsV3, captureCodexSettingsV4, captureCodexSettingsV5, captureCodexSettingsV6, captureCodexSettingsV7, captureCodexSettingsV8 } from "../../lib/codex-settings-witness.js";
-import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts } from "../../lib/native-drift-receipt.js";
+import { clearNativeDriftReceipt, isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftFailOpen, NativeSkillPolicyRefusal, readNativeDriftReceipts, runNativeDriftReport, type NativeDriftReport } from "../../lib/native-drift-receipt.js";
 import { getDataDirReadOnly } from "../../lib/config.js";
 import { readManagedSkillPolicySnapshot } from "../../lib/managed-policy.js";
 import { captureClaudeMarketplaceRegistryV2 } from "../../lib/claude-marketplace-registry.js";
@@ -37,6 +37,15 @@ import { sessionPinMigrationEnabled } from "../../lib/config.js";
 import { captureClaudeInstallerRequest, safeClaudeInstallerCaptureError } from "./claude-installer-capture.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = RECOVERABLE_CACHE_ERRORS;
+
+/** One line on what the station did with a drift receipt's owner report. */
+function driftReportSummary(report: NativeDriftReport | undefined): string {
+  if (!report) return "Owner report: none recorded.";
+  if ((report.status === "filed" || report.status === "existing") && report.taskId) return `Owner report: ${report.status === "filed" ? "filed" : "found open"} as Todos ${report.taskId} (${report.attemptedAt}).`;
+  if (report.status === "pending") return `Owner report: being filed since ${report.attemptedAt}.`;
+  if (report.status === "failed") return `Owner report: failed${report.code ? ` [${report.code}]` : ""} at ${report.attemptedAt}; retried after six hours.`;
+  return `Owner report: not configured${report.code ? ` [${report.code}]` : ""}; set HASNA_SKILLS_DRIFT_REPORT_PROJECT and HASNA_SKILLS_DRIFT_REPORT_ASSIGNEE, or driftReportProject and driftReportAssignee in the global Skills configuration.`;
+}
 /**
  * Characters one managed hook's additionalContext carries at most (owner
  * request 2026-10-30: one prompt received 10-60 KB of skill bodies). The cap
@@ -459,8 +468,25 @@ export function registerAgentIntegration(parent: Command): void {
         const receipts = readNativeDriftReceipts(getDataDirReadOnly()).filter(receipt => options.agent === undefined || receipt.agent === options.agent);
         if (options.json) await writeCliOutput(JSON.stringify({ receipts }));
         else await writeCliOutput(receipts.length
-          ? receipts.map(receipt => `${receipt.agent}: ${receipt.status} since ${receipt.firstSeenAt} (${receipt.occurrences} prompt${receipt.occurrences === 1 ? "" : "s"}, last ${receipt.lastSeenAt}${receipt.clearedAt ? `, cleared ${receipt.clearedAt}` : ""}). ${receipt.status === "active" ? `${receipt.reason} Repair: ${receipt.repair}.` : ""}`.trim()).join("\n")
+          ? receipts.map(receipt => `${receipt.agent}: ${receipt.status} since ${receipt.firstSeenAt} (${receipt.occurrences} prompt${receipt.occurrences === 1 ? "" : "s"}, last ${receipt.lastSeenAt}${receipt.clearedAt ? `, cleared ${receipt.clearedAt}` : ""}). ${receipt.status === "active" ? `${receipt.reason} Repair: ${receipt.repair}. ` : ""}${driftReportSummary(receipt.report)}`.trim()).join("\n")
           : "No native discovery drift receipts.");
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+
+  // Started detached by a managed hook only (HC-01432); it acts only for the
+  // exact lock operation that started it, so a stray invocation does nothing.
+  hook.command("drift-report", { hidden: true })
+    .requiredOption("--agent <agent>", "The agent whose active drift receipt is reported")
+    .requiredOption("--operation-id <uuid>", "The exact drift report lock operation")
+    .option("--json", "Return the outcome as JSON", false)
+    .description("File one owner task for an active native drift receipt through the station's todos CLI")
+    .action(async (options: { agent: string; operationId: string; json: boolean }) => {
+      try {
+        if (!INTEGRATION_AGENTS.includes(options.agent as IntegrationAgent)) throw new Error(`Supported agents: ${INTEGRATION_AGENTS.join(", ")}`);
+        const result = await runNativeDriftReport(getDataDirReadOnly(), options.agent, options.operationId);
+        const outcome = { status: result.status, ...(result.report?.taskId ? { taskId: result.report.taskId } : {}), ...(result.report?.code ? { code: result.report.code } : {}) };
+        await writeCliOutput(options.json ? JSON.stringify(outcome) : `Drift report ${outcome.status}${"taskId" in outcome ? ` (Todos ${outcome.taskId})` : ""}${"code" in outcome ? ` [${outcome.code}]` : ""}.`);
+        if (result.status === "failed") process.exitCode = 1;
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 

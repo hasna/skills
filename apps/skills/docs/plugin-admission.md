@@ -812,6 +812,65 @@ Hermes accept only model context on these events, so there the warning reaches
 the model, not a separate user-visible line; the receipt and `skills hook drift`
 are the operator's record on every host.
 
+#### Owner report
+
+A receipt on its own reaches nobody. When the station configures a report
+target, the hook also files one Todos task for the Skills owner, once per
+station, agent and drift reason, never per prompt:
+
+| Setting | Environment variable | Global configuration key | Format |
+| --- | --- | --- | --- |
+| Todos project | `HASNA_SKILLS_DRIFT_REPORT_PROJECT` | `driftReportProject` | UUID |
+| Assignee | `HASNA_SKILLS_DRIFT_REPORT_ASSIGNEE` | `driftReportAssignee` | `^[a-z][a-z0-9-]{2,80}$` |
+| `todos` executable (optional) | `HASNA_SKILLS_DRIFT_REPORT_TODOS_BIN` | `driftReportTodosBin` | absolute path |
+
+The environment variable wins over the key; keys are set with `skills config
+set <key> <value> --global` and are read only from the global configuration.
+Without a project and an assignee nothing is reported, and an invalid value
+counts as not configured (`DRIFT_REPORT_CONFIG_INVALID`). The package holds no
+Todos address, project, assignee or credential of its own.
+
+- The hook makes no network call and never waits. On a new drift episode, or
+  when an unfiled report's last attempt is older than six hours, it takes the
+  exclusive lock `native-drift/<agent>.report.lock`, records the attempt as
+  `pending` in `native-drift/<agent>.report.json` and starts one detached
+  `skills hook drift-report --agent <agent> --operation-id <uuid>` worker.
+  Concurrent prompts see the lock and start nothing; a lock older than three
+  minutes belongs to no live worker.
+- The worker runs the station's own `todos` CLI, which carries its own
+  identity and credentials. The executable is the configured absolute path, or
+  else the first `todos` on an absolute `PATH` entry; after resolving links it
+  must be a regular executable file owned by the current user or root and not
+  writable by group or others. It runs with an explicit environment (`HOME`,
+  `PATH`, `USER`, `LOGNAME`, `LANG`, `TMPDIR` and the `HASNA_*` and `TODOS_*`
+  names, without `HASNA_SKILLS_*` and without a local-store opt-in), a 20 second
+  limit per call, and the description on stdin rather than argv. Its stderr is
+  never recorded.
+- Before creating, it lists open `skills-drift` tasks in the project with
+  `--json` and reuses one whose title carries the stable key
+  `[skills-drift <station>:<agent>:<first 12 hex of reasonSha256>]` (station:
+  `HASNA_STATION`, else the host name). Otherwise it creates one task with that
+  key in its title, assigned to the configured owner, tag `skills-drift`,
+  priority high and due in two days. The title and description carry safe
+  metadata only: station, agent, event, the bounded reason (700 characters,
+  control characters escaped), its SHA-256, first and last seen, occurrences,
+  the repair command and the receipt path.
+- The receipt's optional `report` object records the outcome: `status`
+  (`filed`, `existing`, `not-configured`, `failed` or `pending`), `taskId` when
+  known, `attemptedAt` and a short error `code`. Receipts written before this
+  field still parse; `skills hook drift` shows the report on each receipt.
+
+The agent notice is computed when the prompt runs, from the report state at
+that moment, and claims an owner was told only when a task id exists:
+
+- filed or found: "...; this station recorded it and filed one task for the
+  Skills owner (Todos <taskId>). Continue the user's task. ..."
+- being filed: "...; this station recorded it locally and is filing one task
+  for the Skills owner. Continue the user's task. ..."
+- not configured or failed: "...; this station recorded it locally only (no
+  owner report is configured | the owner report failed); an operator can list
+  it with `skills hook drift`. Continue the user's task. ..."
+
 ## Verification and limits
 
 Unit tests cover provenance and mapping failures, offline/revoked authorities,

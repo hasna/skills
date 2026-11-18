@@ -3,7 +3,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { isNativeBridgeIntegrityRefusal, isNativeSkillDrift, NATIVE_DRIFT_AGENT_NOTICE, NATIVE_DRIFT_BRIDGE_NOTICE, NativeBridgeIntegrityRefusal, NativeSkillPolicyRefusal, nativeDriftFailOpen } from "./native-drift-receipt.js";
+import { isNativeBridgeIntegrityRefusal, isNativeSkillDrift, nativeDriftAgentNotice, nativeDriftBridgeNotice, NativeBridgeIntegrityRefusal, NativeSkillPolicyRefusal, nativeDriftFailOpen } from "./native-drift-receipt.js";
 
 // Review finding (2026-10-20): an unverified skills-cli bridge is not ordinary
 // drift. The tool call that would load it is refused; the prompt proceeds with
@@ -25,11 +25,14 @@ test("an unverified skills-cli bridge is a policy refusal, and its prompt notice
     const output = nativeDriftFailOpen(data, agent, event, event, message, { bridgeUnverified: true }) as any;
     expect(output.decision).toBeUndefined(); expect(output.continue).toBeUndefined();
     expect(output.systemMessage).toContain("bridge is missing or modified");
-    expect(output.hookSpecificOutput.additionalContext).toBe(NATIVE_DRIFT_BRIDGE_NOTICE);
-    expect(NATIVE_DRIFT_BRIDGE_NOTICE).toContain("do not invoke the skills-cli native skill");
+    // No report target is configured here, so the notice says the drift was recorded on this station only.
+    expect(output.hookSpecificOutput.additionalContext).toBe(nativeDriftBridgeNotice(null));
+    expect(output.hookSpecificOutput.additionalContext).toContain("do not invoke the skills-cli native skill");
+    expect(output.hookSpecificOutput.additionalContext).toContain("recorded it locally only (no owner report is configured)");
+    expect(output.hookSpecificOutput.additionalContext).not.toContain("reported to the operator");
   }
-  expect((nativeDriftFailOpen(data, "sumi", "UserPromptSubmit", "UserPromptSubmit", message, { bridgeUnverified: true }) as any).hookSpecificOutput.additionalContext).toEndWith(NATIVE_DRIFT_BRIDGE_NOTICE);
-  expect((nativeDriftFailOpen(data, "hermes", "UserPromptSubmit", "pre_llm_call", message, { bridgeUnverified: true }) as any).context).toEndWith(NATIVE_DRIFT_BRIDGE_NOTICE);
+  expect((nativeDriftFailOpen(data, "sumi", "UserPromptSubmit", "UserPromptSubmit", message, { bridgeUnverified: true }) as any).hookSpecificOutput.additionalContext).toEndWith(nativeDriftBridgeNotice(null));
+  expect((nativeDriftFailOpen(data, "hermes", "UserPromptSubmit", "pre_llm_call", message, { bridgeUnverified: true }) as any).context).toEndWith(nativeDriftBridgeNotice(null));
   // Ordinary drift keeps the ordinary notice.
-  expect((nativeDriftFailOpen(data, "claude", "UserPromptSubmit", "UserPromptSubmit", message) as any).hookSpecificOutput.additionalContext).toBe(NATIVE_DRIFT_AGENT_NOTICE);
+  expect((nativeDriftFailOpen(data, "claude", "UserPromptSubmit", "UserPromptSubmit", message) as any).hookSpecificOutput.additionalContext).toBe(nativeDriftAgentNotice(null));
 });
