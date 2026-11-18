@@ -17,12 +17,20 @@
  *
  * Nothing here throws into the hook path: each step's failure only changes the
  * recorded status.
+ *
+ * Bounds (HC-01435): one cause keys one task (the key hashes the reason with
+ * its paths normalised); an outcome already filed for a reason is reused for
+ * the retry window, so a reason that flips back and forth or clears and
+ * reopens starts no new worker; a failure of the todos CLI itself holds every
+ * reason for that window; the worker stops before its lock can go stale and
+ * re-checks that it still owns the lock before creating; the task carries no
+ * due date.
  */
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { DRIFT_REPORT_ASSIGNEE_PATTERN, DRIFT_REPORT_PROJECT_PATTERN } from "./config.js";
 import { selfSpawnCommand } from "./self-spawn.js";
 
@@ -35,11 +43,21 @@ export const DRIFT_REPORT_TAG = "skills-drift";
 export const DRIFT_REPORT_RETRY_MS = 6 * 60 * 60 * 1000;
 /** One `todos` invocation's limit. */
 export const DRIFT_REPORT_TODOS_TIMEOUT_MS = 20_000;
-/** A lock older than this belongs to no live worker (two bounded todos calls plus margin). */
+/** A lock older than this belongs to no live worker (six bounded todos calls plus margin). */
 export const DRIFT_REPORT_LOCK_TTL_MS = 3 * 60 * 1000;
+/** The worker starts no todos call that could still run when its lock may be judged stale. */
+export const DRIFT_REPORT_WORKER_DEADLINE_MS = DRIFT_REPORT_LOCK_TTL_MS - 30_000;
+/** The reason shown in a task description is cut to this many characters. */
+export const DRIFT_REPORT_REASON_CHARS = 300;
 const SPAWN_GRACE_MS = 15_000;
+/** After a todos child exits, how long its output pipes may stay open (a stray grandchild) before the group is killed. */
+const PIPE_CLOSE_GRACE_MS = 2_000;
 const SEARCH_PAGES = 5, SEARCH_PAGE_SIZE = 50;
 const MAX_STATE_BYTES = 16 * 1024, MAX_TODOS_OUTPUT_BYTES = 8 * 1024 * 1024;
+/** How many reasons' filed outcomes the state file remembers. */
+const RECENT_LIMIT = 8;
+/** A failure that is the reason's own, not the todos CLI's: it does not hold other reasons. */
+const REASON_FAILURES = new Set(["DRIFT_RECEIPT_CHANGED"]);
 const REPORT_DIRECTORY = "native-drift";
 const STATE_SCHEMA = "hasna.skills.native-drift-report.v1";
 const LOCK_SCHEMA = "hasna.skills.native-drift-report-lock.v1";
@@ -139,12 +157,29 @@ export function driftReportStation(env: Record<string, string | undefined> = pro
   return safe || "unknown-station";
 }
 
+/**
+ * The hash a report key is made from: the reason with every path-like token
+ * (from `/` or `~` to the next space, quote or separator) replaced and
+ * whitespace collapsed, so the same cause seen through different project
+ * folders keys one task.
+ */
+export function driftReasonKeySha256(reason: string): string {
+  const normalized = reason.replace(/(?:~|\/)[^\s'"`,;)\]]*/g, "<path>").replace(/\s+/g, " ").trim();
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
 /** The stable key a report task carries in its title. */
-export function driftReportKey(station: string, agent: string, reasonSha256: string): string {
-  return `[skills-drift ${station}:${agent}:${reasonSha256.slice(0, 12)}]`;
+export function driftReportKey(station: string, agent: string, reasonKeySha256: string): string {
+  return `[skills-drift ${station}:${agent}:${reasonKeySha256.slice(0, 12)}]`;
 }
 
 // ---------------------------------------------------------------- todos binary
+
+/** A folder another user could write to (other than a sticky one), or owned by someone else. */
+function unsafeFolder(stat: { mode: number; uid: number }, uid: number | undefined): boolean {
+  const sticky = (stat.mode & 0o1000) !== 0;
+  return ((stat.mode & 0o022) !== 0 && !sticky) || (uid !== undefined && stat.uid !== uid && stat.uid !== 0);
+}
 
 function validateTodosBinary(path: string): string {
   let real: string;
@@ -156,6 +191,14 @@ function validateTodosBinary(path: string): string {
   if (!stat.isFile() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0 || (uid !== undefined && stat.uid !== uid && stat.uid !== 0)) {
     throw new DriftReportError("DRIFT_REPORT_TODOS_UNSAFE");
   }
+  // Every folder above it too: a folder someone else can write to could swap
+  // the file between this check and the run.
+  for (let folder = dirname(real); ; folder = dirname(folder)) {
+    let entry;
+    try { entry = lstatSync(folder); } catch { throw new DriftReportError("DRIFT_REPORT_TODOS_UNSAFE"); }
+    if (!entry.isDirectory() || unsafeFolder(entry, uid)) throw new DriftReportError("DRIFT_REPORT_TODOS_UNSAFE");
+    if (dirname(folder) === folder) break;
+  }
   return real;
 }
 
@@ -163,8 +206,9 @@ function validateTodosBinary(path: string): string {
  * The real path of the todos executable to run: the explicit absolute path
  * when configured, otherwise the first `todos` on PATH (absolute entries only).
  * Accepted only as a regular, executable file, after resolving links, owned by
- * this user or root and not writable by group or others. A relative path is
- * never run.
+ * this user or root and not writable by group or others, in folders that are
+ * likewise owned by this user or root and not writable by group or others
+ * (a sticky folder such as /tmp excepted). A relative path is never run.
  */
 export function resolveTodosBinary(explicit: string | undefined, env: Record<string, string | undefined> = process.env): string {
   if (explicit !== undefined) {
@@ -180,38 +224,79 @@ export function resolveTodosBinary(explicit: string | undefined, env: Record<str
   throw new DriftReportError("DRIFT_REPORT_TODOS_NOT_FOUND");
 }
 
-const TODOS_ENV_EXACT = ["HOME", "PATH", "USER", "LOGNAME", "LANG", "TMPDIR"] as const;
-const TODOS_ENV_DROPPED = new Set(["HASNA_TODOS_LOCAL", "TODOS_LOCAL"]);
+/** The process basics and the shared Hasna home, profile and station names the todos CLI reads. */
+const TODOS_ENV_EXACT = [
+  "HOME", "PATH", "USER", "LOGNAME", "LANG", "TMPDIR",
+  "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_DATA_HOME", "HASNA_STATE_HOME", "HASNA_CACHE_HOME", "HASNA_PROFILE", "HASNA_STATION", "HASNA_EVENTS_HOME", "HASNA_EVENTS_DIR",
+] as const;
+/** The todos CLI's own names. */
+const TODOS_ENV_OWN = /^(?:HASNA_TODOS|TODOS)_[A-Z0-9_]+$/;
+/** Of those, a local-store opt-in, a direct database or storage route and server-side keys are never passed. */
+const TODOS_ENV_DROPPED = /^(?:HASNA_TODOS|TODOS)_(?:LOCAL|DB_PATH|DB_SCOPE|DATABASE_[A-Z0-9_]+|S3_[A-Z0-9_]+|RDS_[A-Z0-9_]+|SERVER_API_KEY|API_SIGNING_KEY)$/;
 /**
- * The explicit environment for the todos child: the basic process names and
- * the HASNA_ and TODOS_ names its own identity and authority read. The Skills
- * package's own HASNA_SKILLS_ settings are not passed, and neither is a local
- * store opt-in, so a report never lands in a private local database.
+ * The explicit environment for the todos child: the process basics, the shared
+ * Hasna home, profile and station names, and the todos CLI's own HASNA_TODOS_
+ * and TODOS_ names. Another app's HASNA_ settings and credentials, the Skills
+ * package's own HASNA_SKILLS_ settings, a local-store opt-in and direct
+ * database, storage or server keys are not passed, so a report goes only
+ * through the CLI's own hosted route and identity.
  */
 export function todosChildEnvironment(env: Record<string, string | undefined> = process.env): Record<string, string> {
   const result: Record<string, string> = {};
   for (const name of TODOS_ENV_EXACT) { const value = env[name]; if (value !== undefined) result[name] = value; }
   for (const [name, value] of Object.entries(env)) {
-    if (value === undefined || !/^(HASNA|TODOS)_[A-Z0-9_]+$/.test(name) || name.startsWith("HASNA_SKILLS_") || TODOS_ENV_DROPPED.has(name)) continue;
+    if (value === undefined || !TODOS_ENV_OWN.test(name) || TODOS_ENV_DROPPED.test(name)) continue;
     result[name] = value;
   }
   result.NO_COLOR = "1";
   return result;
 }
 
-export interface TodosRun { exitCode: number | null; stdout: string; timedOut: boolean }
+export interface TodosRun { exitCode: number | null; stdout: string; timedOut: boolean; outputTooLarge?: boolean }
 export type TodosRunner = (command: string, args: string[], input: string | undefined, env: Record<string, string>, timeoutMs: number) => Promise<TodosRun>;
 
-const runTodosChild: TodosRunner = async (command, args, input, env, timeoutMs) => {
-  const child = Bun.spawn([command, ...args], { cwd: env.HOME && isAbsolute(env.HOME) ? env.HOME : "/", env, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe" });
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
-  try {
-    // stderr is drained and discarded: it is never recorded.
-    const [stdout, , exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    return { exitCode, stdout: stdout.length > MAX_TODOS_OUTPUT_BYTES ? "" : stdout, timedOut };
-  } finally { clearTimeout(timer); }
-};
+/**
+ * Run one todos call in its own process group, from `/` (so no project
+ * bunfig or .env is read). Its output is capped while it streams; on the time
+ * limit or the cap the whole group is killed, and pipes a stray grandchild
+ * keeps open are not waited on for more than a short grace after the child
+ * exits. stderr is drained and never recorded.
+ */
+export const runTodosChild: TodosRunner = (command, args, input, env, timeoutMs) => new Promise(resolve => {
+  let child: ReturnType<typeof spawn>;
+  try { child = spawn(command, args, { cwd: "/", env, detached: true, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] }); }
+  catch { resolve({ exitCode: null, stdout: "", timedOut: false }); return; }
+  const chunks: Buffer[] = [];
+  let size = 0, outputTooLarge = false, timedOut = false, settled = false, exited = false, exitCode: number | null = null;
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  const killGroup = () => {
+    try { if (child.pid) process.kill(-child.pid, "SIGKILL"); }
+    catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true; clearTimeout(timer); if (grace) clearTimeout(grace);
+    child.stdout?.destroy(); child.stderr?.destroy();
+    resolve(outputTooLarge ? { exitCode: null, stdout: "", timedOut, outputTooLarge } : { exitCode, stdout: Buffer.concat(chunks).toString("utf8"), timedOut });
+  };
+  const timer = setTimeout(() => { timedOut = true; killGroup(); if (exited) finish(); }, timeoutMs);
+  child.stdout!.on("data", (chunk: Buffer) => {
+    if (outputTooLarge) return;
+    size += chunk.length;
+    if (size > MAX_TODOS_OUTPUT_BYTES) { outputTooLarge = true; chunks.length = 0; killGroup(); if (exited) finish(); }
+    else chunks.push(chunk);
+  });
+  child.stderr!.on("data", () => { /* drained and discarded */ });
+  child.on("error", () => { exitCode = null; finish(); });
+  let closed = false;
+  child.on("exit", code => {
+    exited = true; exitCode = code;
+    if (closed || timedOut || outputTooLarge) { finish(); return; }
+    grace = setTimeout(() => { killGroup(); finish(); }, PIPE_CLOSE_GRACE_MS);
+  });
+  child.on("close", code => { closed = true; if (!exited) { exited = true; exitCode = code; } finish(); });
+  if (input !== undefined && child.stdin) { child.stdin.on("error", () => { /* the child closed its input */ }); child.stdin.end(input); }
+});
 
 function taskIdOf(task: Record<string, unknown>): string | undefined {
   for (const value of [task.short_id, task.id]) if (typeof value === "string" && TASK_ID.test(value)) return value;
@@ -224,8 +309,30 @@ function parseJson(text: string, code: string): any {
 
 // ---------------------------------------------------------------- state and lock files
 
+/** A reason's filed or found task, remembered across episodes. */
+interface RecentOutcome { reasonKeySha256: string; status: "filed" | "existing"; taskId: string; attemptedAt: string }
 interface ReportState extends NativeDriftReport {
   schema: typeof STATE_SCHEMA; agent: string; reasonSha256: string; firstSeenAt: string; operationId?: string; finishedAt?: string;
+  /** The normalised reason hash the task key uses; absent in state written by 0.10.98. */
+  reasonKeySha256?: string;
+  /** The newest filed or found outcome per reason key, newest first. */
+  recent?: RecentOutcome[];
+}
+
+function parseRecent(value: unknown): RecentOutcome[] | undefined {
+  if (!Array.isArray(value) || value.length > RECENT_LIMIT) return undefined;
+  const result: RecentOutcome[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || !SHA256.test(entry.reasonKeySha256) || (entry.status !== "filed" && entry.status !== "existing")
+      || typeof entry.taskId !== "string" || !TASK_ID.test(entry.taskId) || !exactTimestamp(entry.attemptedAt)) return undefined;
+    result.push({ reasonKeySha256: entry.reasonKeySha256, status: entry.status, taskId: entry.taskId, attemptedAt: entry.attemptedAt });
+  }
+  return result;
+}
+
+/** Remember this outcome for its reason key, newest first, one entry per key. */
+function remember(recent: RecentOutcome[] | undefined, outcome: RecentOutcome): RecentOutcome[] {
+  return [outcome, ...(recent ?? []).filter(entry => entry.reasonKeySha256 !== outcome.reasonKeySha256)].slice(0, RECENT_LIMIT);
 }
 interface ReportLock { schema: typeof LOCK_SCHEMA; agent: string; operationId: string; createdAt: string; spawnerPid: number }
 
@@ -269,10 +376,14 @@ function readState(dataDir: string, agent: string): ReportState | null {
   const report = parseNativeDriftReport(value);
   if (!report || value.schema !== STATE_SCHEMA || value.agent !== agent || typeof value.reasonSha256 !== "string" || !SHA256.test(value.reasonSha256)
     || !exactTimestamp(value.firstSeenAt) || (value.operationId !== undefined && (typeof value.operationId !== "string" || !OPERATION_ID.test(value.operationId)))
-    || (value.finishedAt !== undefined && !exactTimestamp(value.finishedAt))) return null;
+    || (value.finishedAt !== undefined && !exactTimestamp(value.finishedAt))
+    || (value.reasonKeySha256 !== undefined && (typeof value.reasonKeySha256 !== "string" || !SHA256.test(value.reasonKeySha256)))) return null;
+  // A damaged history is dropped, not trusted; the state itself still counts.
+  const recent = parseRecent(value.recent);
   return {
     ...report, schema: STATE_SCHEMA, agent, reasonSha256: value.reasonSha256, firstSeenAt: value.firstSeenAt,
     ...(value.operationId !== undefined ? { operationId: value.operationId } : {}), ...(value.finishedAt !== undefined ? { finishedAt: value.finishedAt } : {}),
+    ...(value.reasonKeySha256 !== undefined ? { reasonKeySha256: value.reasonKeySha256 } : {}), ...(recent ? { recent } : {}),
   };
 }
 
@@ -306,7 +417,10 @@ function readLock(dataDir: string, agent: string): LockSnapshot | null {
 function lockIsStale(snapshot: LockSnapshot, now: number): boolean {
   const created = snapshot.lock ? Date.parse(snapshot.lock.createdAt) : snapshot.mtimeMs;
   const age = now - Math.min(created, snapshot.mtimeMs);
-  return snapshot.lock ? age > DRIFT_REPORT_LOCK_TTL_MS : age > SPAWN_GRACE_MS;
+  const limit = snapshot.lock ? DRIFT_REPORT_LOCK_TTL_MS : SPAWN_GRACE_MS;
+  // A lock dated further in the future than its own limit was made under a
+  // clock that has since gone back: it would otherwise never expire.
+  return age > limit || age < -limit;
 }
 /** Remove the lock only while it still is the inspected file. */
 function removeLockIfUnchanged(dataDir: string, agent: string, expected: LockSnapshot): void {
@@ -337,8 +451,8 @@ const reportOf = (state: ReportState): NativeDriftReport => ({
 
 // ---------------------------------------------------------------- hook side
 
-/** One drift episode: the receipt's reason and the moment this episode began. */
-export interface DriftEpisode { reasonSha256: string; firstSeenAt: string }
+/** One drift episode: the receipt's reason, its normalised key hash, and the moment this episode began. */
+export interface DriftEpisode { reasonSha256: string; firstSeenAt: string; reasonKeySha256?: string }
 
 export interface DriftReportOptions {
   env?: Record<string, string | undefined>;
@@ -374,10 +488,20 @@ function spawnDetachedWorker(args: string[], notStarted: () => void): void {
  * Decide this prompt's report and, when a report is due, take the exclusive
  * lock and record the attempt as pending. Never throws and never waits; it
  * makes no network call. The caller writes the receipt, then calls start().
+ *
+ * A new attempt starts only when none of these holds: this episode is already
+ * filed; a live lock exists; this reason key was filed or found within the
+ * retry window (reused, so a reason that flips or clears and reopens starts no
+ * worker); the last attempt failed within the window, which holds every reason
+ * (the todos CLI, the worker or the station failed) unless it failed only
+ * because the receipt had changed under it. A clock running backwards counts
+ * as inside the window.
  */
 export function planNativeDriftReport(dataDir: string, agent: string, episode: DriftEpisode, options: DriftReportOptions = {}): DriftReportPlan {
   const clock = options.now ?? Date.now;
   const now = clock(), at = new Date(now).toISOString();
+  const within = (time: string) => Math.abs(now - Date.parse(time)) < DRIFT_REPORT_RETRY_MS;
+  const key = episode.reasonKeySha256 ?? episode.reasonSha256;
   try {
     const target = resolveDriftReportTarget(dataDir, options.env ?? process.env);
     if (!target.configured) return { report: { status: "not-configured", attemptedAt: at, ...(target.code ? { code: target.code } : {}) } };
@@ -386,18 +510,26 @@ export function planNativeDriftReport(dataDir: string, agent: string, episode: D
     if (current && (current.status === "filed" || current.status === "existing")) return { report: reportOf(current) };
     const held = readLock(dataDir, agent);
     if (held && !lockIsStale(held, now)) return { report: current?.status === "pending" ? reportOf(current) : { status: "pending", attemptedAt: held.lock?.createdAt ?? at } };
-    if (current) {
-      const since = now - Date.parse(current.attemptedAt);
+    const known = recorded?.recent?.find(entry => entry.reasonKeySha256 === key && within(entry.attemptedAt));
+    if (known) return { report: { status: known.status, taskId: known.taskId, attemptedAt: known.attemptedAt } };
+    if (recorded && recorded.status !== "not-configured" && within(recorded.attemptedAt)) {
       // A pending attempt without a live lock has no worker left: it is not
-      // filing anything, so it is reported as failed until the retry window ends.
-      if (since >= 0 && since < DRIFT_REPORT_RETRY_MS) return { report: current.status === "pending" ? { status: "failed", attemptedAt: current.attemptedAt, code: "DRIFT_REPORT_WORKER_LOST" } : reportOf(current) };
+      // filing anything, so it is reported as failed until the window ends.
+      const last: NativeDriftReport = recorded.status === "pending" ? { status: "failed", attemptedAt: recorded.attemptedAt, code: "DRIFT_REPORT_WORKER_LOST" } : reportOf(recorded);
+      if (last.status === "failed" && !REASON_FAILURES.has(last.code ?? "")) return { report: last };
     }
     if (held) removeLockIfUnchanged(dataDir, agent, held);
     const operationId = randomUUID();
     if (!createLock(dataDir, { schema: LOCK_SCHEMA, agent, operationId, createdAt: at, spawnerPid: process.pid })) {
-      return { report: { status: "pending", attemptedAt: at } };
+      // Another prompt took the lock just now, or the lock path is something
+      // no worker can hold (a link, a folder, a file left by another user).
+      const again = readLock(dataDir, agent);
+      return { report: again && !lockIsStale(again, now) ? { status: "pending", attemptedAt: again.lock?.createdAt ?? at } : { status: "failed", attemptedAt: at, code: "DRIFT_REPORT_LOCK_UNUSABLE" } };
     }
-    const pending: ReportState = { schema: STATE_SCHEMA, agent, reasonSha256: episode.reasonSha256, firstSeenAt: episode.firstSeenAt, operationId, status: "pending", attemptedAt: at };
+    const pending: ReportState = {
+      schema: STATE_SCHEMA, agent, reasonSha256: episode.reasonSha256, firstSeenAt: episode.firstSeenAt, reasonKeySha256: key, operationId, status: "pending", attemptedAt: at,
+      ...(recorded?.recent ? { recent: recorded.recent } : {}),
+    };
     try { writeState(dataDir, pending); }
     catch { releaseLock(dataDir, agent, operationId); return { report: { status: "failed", attemptedAt: at, code: "DRIFT_REPORT_STATE_UNWRITABLE" } }; }
     // A worker that never started records that for this attempt only and
@@ -450,40 +582,53 @@ export interface DriftReportWorkerOptions {
   boundReason?: (reason: string) => string;
 }
 
-function dueDate(now: number): string {
-  return new Date(now + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
 /** The task title: a readable summary ending in the stable dedupe key. */
-export function driftReportTitle(station: string, agent: string, reasonSha256: string): string {
-  return `Skills native discovery drift on ${station} (${agent}) ${driftReportKey(station, agent, reasonSha256)}`;
+export function driftReportTitle(station: string, agent: string, reasonKeySha256: string): string {
+  return `Skills native discovery drift on ${station} (${agent}) ${driftReportKey(station, agent, reasonKeySha256)}`;
 }
 
-/** The task description: safe metadata only (no environment, no file contents). */
-export function driftReportDescription(station: string, receipt: DriftReportReceipt, reason: string): string {
+/** Text with the user's home folder written as `~`, so a description names no local account. */
+export function withHomeAsTilde(text: string, home: string | undefined): string {
+  if (!home || !isAbsolute(home) || home === "/") return text;
+  const trimmed = home.replace(/\/+$/, "");
+  if (!trimmed) return text;
+  // Only the folder itself, never a sibling that shares its prefix (/Users/a vs /Users/ab).
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`${escaped}(?=$|[/\\s'"\`,;:)\\]])`, "g"), "~");
+}
+
+/**
+ * The task description: safe metadata only (no environment, no file
+ * contents). The reason is the receipt's bounded reason, cut to
+ * DRIFT_REPORT_REASON_CHARS, and the home folder is written as `~` in it and
+ * in the receipt path.
+ */
+export function driftReportDescription(station: string, receipt: DriftReportReceipt, reason: string, home?: string): string {
   return [
     `Managed Skills hooks on station ${station} found native skill discovery drift for ${receipt.agent}. Prompts are not blocked; Skills context is omitted on this station until the drift is reviewed and repaired.`,
     "",
     `- Station: ${station}`,
     `- Agent: ${receipt.agent}`,
     `- Event: ${receipt.event}`,
-    `- Reason: ${reason}`,
+    `- Reason: ${withHomeAsTilde(reason, home)}`,
     `- Reason SHA-256: ${receipt.reasonSha256}`,
     `- First seen: ${receipt.firstSeenAt}`,
     `- Last seen: ${receipt.lastSeenAt}`,
     `- Occurrences: ${receipt.occurrences}`,
     `- Repair: ${receipt.repair}`,
-    `- Receipt: ${receipt.path}`,
+    `- Receipt: ${withHomeAsTilde(receipt.path, home)}`,
     "",
-    "Filed once per station, agent and drift reason by `skills hook drift-report`. Run `skills hook drift` on the station for the current receipt.",
+    "Filed once per station, agent and drift cause by `skills hook drift-report`. Run `skills hook drift` on the station for the current receipt.",
   ].join("\n");
 }
 
-async function findOpenReportTask(bin: string, project: string, key: string, env: Record<string, string>, run: TodosRunner, timeoutMs: number): Promise<string | undefined> {
+async function findOpenReportTask(bin: string, project: string, key: string, env: Record<string, string>, run: TodosRunner, timeoutMs: number, beforeCall: () => void): Promise<string | undefined> {
   let continuation: string[] = [];
   for (let page = 0; page < SEARCH_PAGES; page++) {
+    beforeCall();
     const result = await run(bin, ["--json", "--project", project, "list", "--tags", DRIFT_REPORT_TAG, "--limit", String(SEARCH_PAGE_SIZE), ...continuation], undefined, env, timeoutMs);
     if (result.timedOut) throw new DriftReportError("DRIFT_REPORT_TODOS_TIMEOUT");
+    if (result.outputTooLarge) throw new DriftReportError("DRIFT_REPORT_TODOS_OUTPUT_TOO_LARGE");
     if (result.exitCode !== 0) throw new DriftReportError("DRIFT_REPORT_SEARCH_FAILED");
     const value = parseJson(result.stdout, "DRIFT_REPORT_SEARCH_UNREADABLE");
     if (!value || typeof value !== "object" || !Array.isArray(value.tasks)) throw new DriftReportError("DRIFT_REPORT_SEARCH_UNREADABLE");
@@ -513,7 +658,13 @@ export async function runDriftReportWorker(dataDir: string, agent: string, opera
   const env = options.env ?? process.env;
   const started = readState(dataDir, agent);
   if (!started || started.operationId !== operationId) { releaseLock(dataDir, agent, operationId); return { status: "superseded" }; }
-  let state: ReportState = { ...started, attemptedAt: new Date(clock()).toISOString() };
+  const startedAt = clock();
+  let state: ReportState = { ...started, attemptedAt: new Date(startedAt).toISOString() };
+  const outcome = (status: "filed" | "existing", taskId: string): DriftReportRun => {
+    state = { ...state, status, taskId, recent: remember(state.recent, { reasonKeySha256: state.reasonKeySha256 ?? state.reasonSha256, status, taskId, attemptedAt: state.attemptedAt }) };
+    delete state.code;
+    return { status, report: reportOf(state), episode: started };
+  };
   try {
     const receipt = readReceipt();
     if (!receipt || receipt.status !== "active" || receipt.reasonSha256 !== started.reasonSha256 || receipt.firstSeenAt !== started.firstSeenAt) throw new DriftReportError("DRIFT_RECEIPT_CHANGED");
@@ -522,21 +673,32 @@ export async function runDriftReportWorker(dataDir: string, agent: string, opera
     const bin = resolveTodosBinary(target.todosBin, env);
     const childEnv = todosChildEnvironment(env);
     const run = options.runTodos ?? runTodosChild, timeoutMs = options.timeoutMs ?? DRIFT_REPORT_TODOS_TIMEOUT_MS;
+    // No call may still run when this worker's lock can be judged stale and
+    // another worker could start.
+    const beforeCall = () => { if (clock() - startedAt + timeoutMs > DRIFT_REPORT_WORKER_DEADLINE_MS) throw new DriftReportError("DRIFT_REPORT_DEADLINE"); };
     const station = driftReportStation(env);
-    const key = driftReportKey(station, agent, receipt.reasonSha256);
-    const existing = await findOpenReportTask(bin, target.project, key, childEnv, run, timeoutMs);
-    if (existing) { state = { ...state, status: "existing", taskId: existing }; delete state.code; return { status: state.status, report: reportOf(state), episode: started }; }
-    const reason = (options.boundReason ?? (value => value.slice(0, 700)))(receipt.reason);
-    // The description travels on stdin, never on argv.
-    const created = await run(bin, ["--json", "add", driftReportTitle(station, agent, receipt.reasonSha256), "--project", target.project, "--assign", target.assignee,
-      "--tags", DRIFT_REPORT_TAG, "--priority", "high", "--due", dueDate(clock()), "--description-file", "-"], driftReportDescription(station, receipt, reason), childEnv, timeoutMs);
+    const reasonKey = driftReasonKeySha256(receipt.reason);
+    state = { ...state, reasonKeySha256: reasonKey };
+    const key = driftReportKey(station, agent, reasonKey);
+    const existing = await findOpenReportTask(bin, target.project, key, childEnv, run, timeoutMs, beforeCall);
+    if (existing) return outcome("existing", existing);
+    beforeCall();
+    // Only the lock's owner creates: if the lock was taken over, another worker owns this report now.
+    const still = readLock(dataDir, agent);
+    if (still?.lock?.operationId !== operationId) throw new DriftReportError("DRIFT_REPORT_LOCK_LOST");
+    // The home folder is written as `~` first, so a cut can never leave part
+    // of it; the caller's bound (escaping) applies next, and the cap always last.
+    const reason = (options.boundReason ?? (value => value))(withHomeAsTilde(receipt.reason, env.HOME)).slice(0, DRIFT_REPORT_REASON_CHARS);
+    // The description travels on stdin, never on argv. The task carries no due date.
+    const created = await run(bin, ["--json", "add", driftReportTitle(station, agent, reasonKey), "--project", target.project, "--assign", target.assignee,
+      "--tags", DRIFT_REPORT_TAG, "--priority", "high", "--description-file", "-"], driftReportDescription(station, receipt, reason, env.HOME), childEnv, timeoutMs);
     if (created.timedOut) throw new DriftReportError("DRIFT_REPORT_TODOS_TIMEOUT");
+    if (created.outputTooLarge) throw new DriftReportError("DRIFT_REPORT_TODOS_OUTPUT_TOO_LARGE");
     if (created.exitCode !== 0) throw new DriftReportError("DRIFT_REPORT_TODOS_FAILED");
     const task = parseJson(created.stdout, "DRIFT_REPORT_NO_TASK_ID");
     const id = task && typeof task === "object" ? taskIdOf(task) : undefined;
     if (!id) throw new DriftReportError("DRIFT_REPORT_NO_TASK_ID");
-    state = { ...state, status: "filed", taskId: id }; delete state.code;
-    return { status: state.status, report: reportOf(state), episode: started };
+    return outcome("filed", id);
   } catch (error) {
     const code = error instanceof DriftReportError && CODE.test(error.code) ? error.code : "DRIFT_REPORT_FAILED";
     state = { ...state, status: "failed", code };
