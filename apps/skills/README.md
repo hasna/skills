@@ -492,7 +492,8 @@ context. The trusted pre-tool guard blocks native payload skills and a
 `skill_view(skills-cli)` call while the bridge is unverified or can be
 shadowed (a legacy `skills-cli.md`, a bridge-named copy, or an environment
 override above that leaves the effective discovery unchecked); other discovery
-drift is reported and recorded, not blocked, and other tools proceed. This is
+drift is shown and recorded (and filed as one owner task when the station
+configures a drift report target), not blocked, and other tools proceed. This is
 not a claim that Hermes can prevent every model call after a failed
 prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
 
@@ -3661,6 +3662,21 @@ receipt in `<skills-data>/native-drift/<agent>.json`; `skills hook drift --json`
 lists them. Invoking a native payload skill instead of the `skills-cli` bridge
 is still denied, and so is invoking the bridge while the bridge itself is
 missing or modified; install, trust and migration still refuse drift.
+
+To send the drift to an owner, configure a report target on the station:
+`HASNA_SKILLS_DRIFT_REPORT_PROJECT` (a Todos project UUID) and
+`HASNA_SKILLS_DRIFT_REPORT_ASSIGNEE` (an agent address), optionally
+`HASNA_SKILLS_DRIFT_REPORT_TODOS_BIN` (an absolute path to `todos`), or the
+global keys `driftReportProject`, `driftReportAssignee` and
+`driftReportTodosBin` (`skills config set <key> <value> --global`). The hook
+then starts one detached worker that files a single Todos task per station,
+agent and drift reason through the station's own `todos` CLI, or reuses the
+open task carrying the same `[skills-drift <station>:<agent>:<hash>]` key. The
+hook never waits for it and makes no network call itself. The receipt records
+the report (`filed`, `existing`, `pending`, `failed` or `not-configured`), and
+the agent's notice says exactly that: a task id when one was filed, "is filing"
+while the worker runs, and "recorded it locally only" otherwise. See
+[docs/plugin-admission.md](docs/plugin-admission.md#owner-report).
 
 `claude-settings-v5`, `codex-settings-v7` and `codex-settings-v8` reviews bind
 only settings that can add, remove or redirect native skills, hooks or plugins

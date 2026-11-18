@@ -1,6 +1,6 @@
 import { installSumiPathsFixture } from "../lib/sumi-paths.fixture.js";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildCliFixture } from "./cli-build.fixture.js";
@@ -157,6 +157,43 @@ test("a newly enabled Claude plugin is detected and reported, but the prompt is 
   const result = await s.hook();
   expectReportedNotBlocked(result.value, result.stdout, s.settings);
   expect(s.receipt()).toMatchObject({ agent: "claude", status: "active" });
+});
+
+test("a configured station files one owner task through a detached worker; the prompt never waits for it (HC-01432)", async () => {
+  const s = await claudeStation();
+  // A fake station todos CLI: an absolute, owner-only script that records its
+  // calls and keeps tasks in a file. No network and no real Todos.
+  const db = join(s.root, "todos.json"), calls = join(s.root, "todos-calls.log"), todos = join(s.root, "todos-bin", "todos");
+  put(db, "[]");
+  put(todos, `#!${process.execPath}
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2), tasks = JSON.parse(readFileSync(${JSON.stringify(db)}, "utf8"));
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args.includes("list")) console.log(JSON.stringify({ tasks: tasks.filter(task => task.status === "pending"), has_more: false }));
+else { readFileSync(0); const task = { id: crypto.randomUUID(), short_id: "SKD-00001", title: args[args.indexOf("add") + 1], status: "pending" }; writeFileSync(${JSON.stringify(db)}, JSON.stringify([...tasks, task])); console.log(JSON.stringify(task)); }
+`);
+  chmodSync(todos, 0o700);
+  const target = { ...delivered, HASNA_SKILLS_DRIFT_REPORT_PROJECT: "0b7c6a52-6f8e-4b0e-9a54-2d4f1c3e8a10", HASNA_SKILLS_DRIFT_REPORT_ASSIGNEE: "skills-owner", HASNA_SKILLS_DRIFT_REPORT_TODOS_BIN: todos, HASNA_STATION: "station-e2e" };
+  const prompt = async () => {
+    const result = await s.run(["hook", "user-prompt", "--agent", "claude", "--selection-profile", "engineering", "--event", "UserPromptSubmit"], target, { hook_event_name: "UserPromptSubmit", prompt: "test request", cwd: s.cwd }, s.cwd);
+    expect([result.status, result.stderr]).toEqual([0, ""]);
+    return JSON.parse(result.stdout);
+  };
+  expectDelivered((await prompt()));
+  s.edit(value => { value.hooks.PostToolUse = [{ hooks: [{ type: "command", command: "/opt/foreign/post-tool" }] }]; });
+  const first = await prompt();
+  expect(first.hookSpecificOutput.additionalContext).toContain("this station recorded it locally and is filing one task for the Skills owner.");
+  const state = join(s.data, "native-drift", "claude.report.json");
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline && !(existsSync(state) && JSON.parse(readFileSync(state, "utf8")).finishedAt)) await Bun.sleep(100);
+  expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({ status: "filed", taskId: "SKD-00001" });
+  expect(s.receipt().report).toMatchObject({ status: "filed", taskId: "SKD-00001" });
+  const second = await prompt();
+  expect(second.hookSpecificOutput.additionalContext).toContain("this station recorded it and filed one task for the Skills owner (Todos SKD-00001).");
+  expect(JSON.parse(readFileSync(db, "utf8"))).toHaveLength(1);
+  expect(readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line).find((arg: string) => arg === "list" || arg === "add"))).toEqual(["list", "add"]);
+  const listed = await s.run(["hook", "drift", "--agent", "claude"]);
+  expect(listed.stdout).toContain("Owner report: filed as Todos SKD-00001");
 });
 
 test("a Claude Skill tool call keeps its policy under drift: the bridge proceeds, payload skills stay denied", async () => {

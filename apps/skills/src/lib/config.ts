@@ -9,7 +9,7 @@
  */
 
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, statSync, writeFileSync, mkdirSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, isAbsolute } from "path";
 import { RETIRED_CONFIG_KEYS, assertNoRetiredConfigKeys } from "./retired-settings.js";
 import { getDataRoot } from "./app-home.js";
 
@@ -48,7 +48,20 @@ export interface SkillsConfig {
   extensionsDir?: string;
   /** Managed hooks, global scope only: "auto" (default) migrates a refused expired session pin; "off" keeps the refusal. */
   sessionPinMigration?: "auto" | "off";
+  /** Global scope only: the Todos project id (UUID) that receives native drift reports. */
+  driftReportProject?: string;
+  /** Global scope only: the agent address a native drift report task is assigned to. */
+  driftReportAssignee?: string;
+  /** Global scope only: the absolute path of the station's `todos` executable (default: `todos` on PATH). */
+  driftReportTodosBin?: string;
 }
+
+/** A drift report project id: a UUID. */
+export const DRIFT_REPORT_PROJECT_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+/** A drift report assignee: a conservative agent address. */
+export const DRIFT_REPORT_ASSIGNEE_PATTERN = /^[a-z][a-z0-9-]{2,80}$/;
+/** Station settings the managed hook reads only from the global configuration. */
+const GLOBAL_ONLY_KEYS = new Set<string>(["sessionPinMigration", "driftReportProject", "driftReportAssignee", "driftReportTodosBin"]);
 
 const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   defaultAgent: ["claude", "codex", "gemini", "pi", "opencode", "all"],
@@ -57,7 +70,7 @@ const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   sessionPinMigration: ["auto", "off"],
 };
 
-const STRING_KEYS = ["extensionsDir"] as const satisfies readonly (keyof SkillsConfig)[];
+const STRING_KEYS = ["extensionsDir", "driftReportProject", "driftReportAssignee", "driftReportTodosBin"] as const satisfies readonly (keyof SkillsConfig)[];
 
 function validKeys(): string[] {
   return [...Object.keys(ENUM_KEYS), ...STRING_KEYS];
@@ -74,6 +87,9 @@ function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string |
   if (allowed) return allowed.includes(value) ? value : undefined;
 
   if (key === "extensionsDir") return value.trim() ? value : undefined;
+  if (key === "driftReportProject") return DRIFT_REPORT_PROJECT_PATTERN.test(value) ? value.toLowerCase() : undefined;
+  if (key === "driftReportAssignee") return DRIFT_REPORT_ASSIGNEE_PATTERN.test(value) ? value : undefined;
+  if (key === "driftReportTodosBin") return isAbsolute(value) && !value.includes("\0") ? value : undefined;
 
   return undefined;
 }
@@ -264,6 +280,10 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
   if (key === "sessionPinMigration" && scope !== "global") {
     throw new Error(`${key} is read only from the global configuration. Use: skills config set ${key} <auto|off> --global`);
   }
+  // The drift report target is a station setting the hook reads the same way.
+  if (GLOBAL_ONLY_KEYS.has(key) && scope !== "global") {
+    throw new Error(`${key} is read only from the global configuration. Use: skills config set ${key} <value> --global`);
+  }
 
   const normalized = normalizeConfigValue(key as keyof SkillsConfig, value);
   if (normalized === undefined) {
@@ -271,6 +291,9 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
     throw new Error(
       allowed
         ? `Invalid value '${value}' for ${key}. Allowed: ${allowed.join(", ")}`
+        : key === "driftReportProject" ? `Invalid value '${value}' for ${key}. Expected a Todos project UUID`
+        : key === "driftReportAssignee" ? `Invalid value '${value}' for ${key}. Expected an agent address (lowercase letters, digits and hyphens)`
+        : key === "driftReportTodosBin" ? `Invalid value '${value}' for ${key}. Expected an absolute path`
         : `Invalid value '${value}' for ${key}. Expected a non-empty path`
     );
   }
