@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseNativeDriftReport, planNativeDriftReport, runDriftReportWorker, type DriftReportOptions, type DriftReportRun, type DriftReportWorkerOptions, type NativeDriftReport } from "./native-drift-report.js";
+import { driftReasonKeySha256, parseNativeDriftReport, planNativeDriftReport, runDriftReportWorker, type DriftReportOptions, type DriftReportRun, type DriftReportWorkerOptions, type NativeDriftReport } from "./native-drift-report.js";
 
 export type { NativeDriftReport, NativeDriftReportStatus } from "./native-drift-report.js";
 
@@ -199,7 +199,7 @@ export function recordNativeDriftReceiptWithReport(dataDir: string, agent: strin
     const receipt = nextReceipt(dataDir, agent, event, message, now);
     // The report's lock and state live beside the receipt; the directory must
     // exist before the plan takes the lock.
-    const plan = receiptDirectory(dataDir) ? planNativeDriftReport(dataDir, agent, { reasonSha256: receipt.reasonSha256, firstSeenAt: receipt.firstSeenAt }, options) : null;
+    const plan = receiptDirectory(dataDir) ? planNativeDriftReport(dataDir, agent, { reasonSha256: receipt.reasonSha256, firstSeenAt: receipt.firstSeenAt, reasonKeySha256: driftReasonKeySha256(receipt.reason) }, options) : null;
     report = plan?.report ?? null;
     path = writeReceipt(dataDir, agent, report ? { ...receipt, report } : receipt);
     if (plan?.start && path) {
