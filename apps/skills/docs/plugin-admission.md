@@ -830,31 +830,56 @@ Without a project and an assignee nothing is reported, and an invalid value
 counts as not configured (`DRIFT_REPORT_CONFIG_INVALID`). The package holds no
 Todos address, project, assignee or credential of its own.
 
-- The hook makes no network call and never waits. On a new drift episode, or
-  when an unfiled report's last attempt is older than six hours, it takes the
-  exclusive lock `native-drift/<agent>.report.lock`, records the attempt as
-  `pending` in `native-drift/<agent>.report.json` and starts one detached
-  `skills hook drift-report --agent <agent> --operation-id <uuid>` worker.
-  Concurrent prompts see the lock and start nothing; a lock older than three
-  minutes belongs to no live worker.
+- The hook makes no network call and never waits. On a new drift episode it
+  takes the exclusive lock `native-drift/<agent>.report.lock`, records the
+  attempt as `pending` in `native-drift/<agent>.report.json` and starts one
+  detached `skills hook drift-report --agent <agent> --operation-id <uuid>`
+  worker. Concurrent prompts see the lock and start nothing; a lock older than
+  three minutes, or dated more than three minutes ahead of the clock, belongs
+  to no live worker. A lock path no worker can hold (a link, a folder, a file
+  that cannot be removed) is reported as `failed` with
+  `DRIFT_REPORT_LOCK_UNUSABLE`, never as being filed.
+- Attempts are bounded by a six-hour window. A reason whose task was filed or
+  found within the window reuses that task id (the state file remembers the
+  newest outcome for up to eight reasons), so a reason that flips back and
+  forth, or clears and reopens, starts no new worker. A failed attempt holds
+  every reason for the window, because the failure is the station's (the
+  `todos` CLI, the worker or the lock), except `DRIFT_RECEIPT_CHANGED`, which
+  only means the receipt moved on before the worker ran.
 - The worker runs the station's own `todos` CLI, which carries its own
   identity and credentials. The executable is the configured absolute path, or
   else the first `todos` on an absolute `PATH` entry; after resolving links it
   must be a regular executable file owned by the current user or root and not
-  writable by group or others. It runs with an explicit environment (`HOME`,
-  `PATH`, `USER`, `LOGNAME`, `LANG`, `TMPDIR` and the `HASNA_*` and `TODOS_*`
-  names, without `HASNA_SKILLS_*` and without a local-store opt-in), a 20 second
-  limit per call, and the description on stdin rather than argv. Its stderr is
+  writable by group or others, and so must every folder above it (a sticky
+  folder such as `/tmp` excepted). It runs from `/`, in its own process group,
+  with an explicit environment: `HOME`, `PATH`, `USER`, `LOGNAME`, `LANG`,
+  `TMPDIR`, the shared `HASNA_HOME`, `HASNA_CONFIG_HOME`, `HASNA_DATA_HOME`,
+  `HASNA_STATE_HOME`, `HASNA_CACHE_HOME`, `HASNA_PROFILE`, `HASNA_STATION`,
+  `HASNA_EVENTS_HOME` and `HASNA_EVENTS_DIR`, and the CLI's own
+  `HASNA_TODOS_*` and `TODOS_*` names except a local-store opt-in, a direct
+  database, storage or RDS route and server-side keys. Another app's `HASNA_*`
+  settings and `HASNA_SKILLS_*` are never passed. On a station whose hook runs
+  through the pinned launcher, the launcher's own allowlist applies first, so
+  fewer of these names may arrive at all. Each call has a 20 second limit and an
+  8 MiB output cap enforced while it streams; at either limit the whole process
+  group is killed, and pipes a stray grandchild holds open are not waited on
+  for more than two seconds after the call exits. The worker starts no call
+  that could still run after two and a half minutes, so it is done before its
+  lock can be judged stale, and it re-checks that it still owns the lock before
+  it creates a task. The description goes on stdin rather than argv; stderr is
   never recorded.
 - Before creating, it lists open `skills-drift` tasks in the project with
   `--json` and reuses one whose title carries the stable key
-  `[skills-drift <station>:<agent>:<first 12 hex of reasonSha256>]` (station:
-  `HASNA_STATION`, else the host name). Otherwise it creates one task with that
-  key in its title, assigned to the configured owner, tag `skills-drift`,
-  priority high and due in two days. The title and description carry safe
-  metadata only: station, agent, event, the bounded reason (700 characters,
-  control characters escaped), its SHA-256, first and last seen, occurrences,
-  the repair command and the receipt path.
+  `[skills-drift <station>:<agent>:<first 12 hex of the reason key>]`
+  (station: `HASNA_STATION`, else the host name). The reason key is the SHA-256
+  of the reason with every path written as `<path>` and whitespace collapsed,
+  so one cause seen through different project folders keys one task.
+  Otherwise it creates one task with that key in its title, assigned to the
+  configured owner, tag `skills-drift`, priority high and no due date. The
+  title and description carry safe metadata only: station, agent, event, the
+  reason (cut to 300 characters, control characters escaped), its SHA-256,
+  first and last seen, occurrences, the repair command and the receipt path,
+  with the home folder written as `~`.
 - The receipt's optional `report` object records the outcome: `status`
   (`filed`, `existing`, `not-configured`, `failed` or `pending`), `taskId` when
   known, `attemptedAt` and a short error `code`. Receipts written before this

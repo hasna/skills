@@ -3670,7 +3670,7 @@ To send the drift to an owner, configure a report target on the station:
 global keys `driftReportProject`, `driftReportAssignee` and
 `driftReportTodosBin` (`skills config set <key> <value> --global`). The hook
 then starts one detached worker that files a single Todos task per station,
-agent and drift reason through the station's own `todos` CLI, or reuses the
+agent and drift cause (paths normalised, no due date) through the station's own `todos` CLI, or reuses the
 open task carrying the same `[skills-drift <station>:<agent>:<hash>]` key. The
 hook never waits for it and makes no network call itself. The receipt records
 the report (`filed`, `existing`, `pending`, `failed` or `not-configured`), and
