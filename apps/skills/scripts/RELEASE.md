@@ -50,11 +50,17 @@ EXACTLY once each; the linkage namespace is closed, so an extra
 
 <release notes>
 
-Release-Review-Agent: <registered coding-agent identity that reviewed this candidate>
+Release-Review-Agent: <address of the session that requested the independent review>
 Git-Publishing-Thread: <git-publishing release intent thread id>
 Git-Prs-GO: <message id of the independent GO in git-prs for this candidate>
 Packed-SHA256: <64 lowercase hex>
 ```
+
+`Release-Review-Agent` is the address of the coding-agent session that requested
+the independent review; a fresh subagent of that session, which did not write the
+change, performs it, and its receipt says so. It never names another agent's
+registered identity: a reviewer that signs as an agent it is not borrows an
+identity.
 
 `Packed-SHA256` is the SHA-256 of the tarball the release toolchain packs at the
 exact release commit. Produce it in a clean checkout of that commit, with the

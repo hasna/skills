@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.100
+
+- Admit exact Codex 0.170.0 (HAS-00038). Stations 01, 06, 07 and 11 run `codex-cli 0.170.0`, which Skills refused with `CODEX_HOOK_TRUST_NATIVE_UNSUPPORTED_VERSION`. Measured read-only against 0.166.0, every app-server method Skills calls (`initialize`, `hooks/list`, `config/read`, `config/batchWrite`, `skills/list`, `plugin/installed`) keeps its schema except an optional `InitializeParams` capability Skills never sends, a nullable effective-config field it does not read and one description; the native catalog acceptance passes on 0.170.0. The exact version is admitted with the same three capabilities as 0.166.0 (`hooks`, `qualified-skill-catalog`, `installed-plugin-review`). 0.167.x to 0.169.x, 0.170.1, 0.171.0 and pre-releases stay refused, and the tests say so.
+- `Release-Review-Agent` in a release tag now names the session that requested the independent review; a fresh subagent of that session performs it. It never names another agent's registered identity (ruling of 18.11, I13-00116). The field's accepted shape is unchanged; RELEASE.md and the linkage error text say so.
+
 ## 0.10.99
 
 - The drift owner report no longer sets a due date on the task it files (HC-01435). 0.10.98 set one two days out; work an agent can do carries no deadline.
