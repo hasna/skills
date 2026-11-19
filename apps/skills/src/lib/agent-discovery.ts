@@ -11,7 +11,7 @@ import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-byt
 import { pluginExecutableDigest } from "./plugin-projection-store.js";
 import { captureCodexSettingsV6, codexSettingsToleratesScreenReaderReceipt, codexSettingsWitnessMatch, type CodexSettingsWitnessMatch } from "./codex-settings-witness.js";
 import { captureCodexHookMcpDependencies, type CodexReviewedHookSource } from "./codex-hook-mcp-dependencies.js";
-import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
+import { isCodexHttpMcpServer, isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { CLAUDE_ORPHAN_MARKER_MODE, hashClaudePluginCacheOrphanMarker, isClaudePluginCacheOrphanMarker } from "./claude-plugin-cache-marker.js";
 import { NativeDiscoveryWitnessChange, witnessChanged, type NativeDiscoveryWitnessTolerance } from "./native-discovery-witness-change.js";
@@ -1140,14 +1140,15 @@ const CODEX_MARKETPLACE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d
 
 /** Codex controls the V7 projection binds (for hook admission) that add no
  * native skill root, so authoring exclusion needs no review for them:
- *   - `mcp_servers`, when every row is a local stdio server under the shared
- *     Codex contract (`isCodexLocalStdioMcpServer`, the same rows
+ *   - `mcp_servers`, when every row is either a local stdio server or a
+ *     streamable HTTP server under the shared Codex contracts
+ *     (`isCodexLocalStdioMcpServer`, `isCodexHttpMcpServer`; the same rows
  *     codex-settings-v3 to v6 treat as outside native skill discovery). Codex
  *     loads skills from its skill roots, `skills.config` and enabled plugins,
- *     never from an MCP server, and a row's command, args and cwd name what
- *     the server runs, not where Codex looks for skills. The reserved Apps
- *     server, HTTP or OAuth servers, unknown fields and malformed rows keep
- *     the whole control unresolved.
+ *     never from an MCP server: a stdio row's command, args and cwd name what
+ *     the server runs, and an HTTP row's url is not a filesystem path. The
+ *     reserved Apps server, OAuth/cloud/auth contracts, unknown fields and
+ *     malformed rows keep the whole control unresolved.
  *   - `agents`, when it holds only scalar thread settings (numbers and
  *     booleans). A role table can load a `config_file` layer that adds skills,
  *     plugins, hooks or instructions, so any table or string keeps refusing.
@@ -1157,7 +1158,8 @@ function codexRootFreeControls(config: Record<string, any>): string[] {
   const adapted: string[] = [];
   const servers = config.mcp_servers;
   if (table(servers) && Object.keys(servers).length <= AGENT_POLICY_LIMITS.discoveryRoots
-    && Object.entries(servers).every(([name, row]) => name !== "codex_apps" && name !== "_codex_apps" && isCodexLocalStdioMcpServer(name, row))) adapted.push("mcp_servers");
+    && Object.entries(servers).every(([name, row]) => name !== "codex_apps" && name !== "_codex_apps"
+      && (isCodexLocalStdioMcpServer(name, row) || isCodexHttpMcpServer(name, row)))) adapted.push("mcp_servers");
   const agents = config.agents;
   if (table(agents) && Object.keys(agents).length <= AGENT_POLICY_LIMITS.fields
     && Object.values(agents).every(value => typeof value === "boolean" || typeof value === "number" && Number.isFinite(value))) adapted.push("agents");

@@ -1,15 +1,20 @@
-/** Codex 0.160 local stdio MCP contract, separate from native skill discovery.
+/** Codex 0.160 MCP contracts — local stdio and streamable HTTP — separate from
+ * native skill discovery.
  * Source: openai/codex rust-v0.160.0 core/config.schema.json RawMcpServerConfig,
- * core/src/config/types.rs, codex-mcp/src/mcp/mod.rs. HTTP/OAuth/cloud/auth and
- * unknown contracts remain fully witnessed. This never verifies MCP responses. */
-import { isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
+ * core/src/config/types.rs, codex-mcp/src/mcp/mod.rs. OAuth/cloud/auth, a mixed
+ * command/url row and unknown contracts remain fully witnessed. This never
+ * verifies MCP responses. */
+import { isCodexHttpMcpServer, isCodexLocalStdioMcpServer } from "./codex-local-mcp-controls.js";
 import { isDeepStrictEqual } from "node:util";
 function record(value: unknown): value is Record<string, any> {
   return !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
 }
-function localStdio(name: string, row: unknown): boolean {
+function nonDiscoveryRow(name: string, row: unknown): boolean {
   // codex_apps is upstream's actual reserved name; keep its legacy spelling too.
-  return name !== "codex_apps" && name !== "_codex_apps" && isCodexLocalStdioMcpServer(name, row);
+  // Both an admitted stdio row and an admitted HTTP row only name what a server
+  // runs or a URL it reaches, never a skill root.
+  return name !== "codex_apps" && name !== "_codex_apps"
+    && (isCodexLocalStdioMcpServer(name, row) || isCodexHttpMcpServer(name, row));
 }
 function stripEmptyParent(config: Record<string, any>): Record<string, any> {
   if (record(config.mcp_servers) && !Object.keys(config.mcp_servers).length) delete config.mcp_servers;
@@ -22,7 +27,7 @@ function stripEmptyParent(config: Record<string, any>): Record<string, any> {
 export function projectRegularCodexMcp(config: Record<string, any>, source: string): { config: Record<string, any>; numericSource: string } {
   const unchanged = { config, numericSource: source };
   if (!record(config.mcp_servers)) return unchanged;
-  const candidates = Object.entries(config.mcp_servers).filter(([name, row]) => localStdio(name, row)).map(([name]) => name);
+  const candidates = Object.entries(config.mcp_servers).filter(([name, row]) => nonDiscoveryRow(name, row)).map(([name]) => name);
   if (!candidates.length) return unchanged;
   const headers: Array<{ start: number; path: string[] }> = [];
   let attempts = 0;
