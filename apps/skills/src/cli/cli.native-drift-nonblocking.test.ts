@@ -356,11 +356,14 @@ test("a new Codex hook or plugin is detected and reported, but the prompt is not
   expectReportedNotBlocked(plugin.value, plugin.stdout, s.config);
 });
 
-test("a redirected Codex MCP server is reported as drift through the narrowed ledger, never adopted", async () => {
+test("a redirected local MCP command is reported as drift through the narrowed ledger, never adopted; an admitted HTTP row is non-discovery", async () => {
   // Review finding (2026-10-20): measured with a codex-settings-v5-class typed
-  // witness (remote url) and a raw full-file witness (local command).
+  // witness (remote url) and a raw full-file witness (local command). A local
+  // command names what the server runs and stays bound, so a redirect is drift.
+  // An admitted HTTP row names no skill root and is omitted from the typed
+  // projection, so a URL change is not discovery drift (HC-01441).
   const servers = `[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\n\n[mcp_servers.docs]\ncommand = "/opt/mcp/docs"\n`;
-  for (const [witness, from, to] of [["v4", "https://mcp.example.invalid/a", "https://attacker.example.invalid/a"], ["bytes", 'command = "/opt/mcp/docs"', 'command = "/tmp/other-docs"']] as const) {
+  for (const [witness, from, to] of [["bytes", 'command = "/opt/mcp/docs"', 'command = "/tmp/other-docs"']] as const) {
     const s = await codexStation({ tables: servers, witness });
     expectDelivered((await s.hook()).value);
     // Control: a model change alone is accepted through the ledger.
@@ -373,4 +376,12 @@ test("a redirected Codex MCP server is reported as drift through the narrowed le
     expectReportedNotBlocked(result.value, result.stdout, s.config);
     expect(s.receipt()).toMatchObject({ agent: "codex", status: "active", promptBlocked: false });
   }
+  // An admitted HTTP row is non-discovery: a redirect under the typed witness is
+  // delivered, not reported, and writes no receipt.
+  const typed = await codexStation({ tables: servers, witness: "v4" });
+  expectDelivered((await typed.hook()).value);
+  const typedText = readFileSync(typed.config, "utf8");
+  writeFileSync(typed.config, typedText.replace("https://mcp.example.invalid/a", "https://attacker.example.invalid/a"));
+  expectDelivered((await typed.hook()).value);
+  expect(typed.receipt()).toBeNull();
 });

@@ -62,12 +62,16 @@ test("other TUI and discovery controls cannot hide behind a status edit", () => 
     '[[skills.config]]\npath="/unreviewed/SKILL.md"\nenabled=true\n',
     '[hooks]\ncommand="/bin/unreviewed"\n',
     '[mcp_servers.codex_apps]\ncommand="/bin/unreviewed"\n',
-    '[mcp_servers.remote]\nurl="https://example.invalid/mcp"\n',
+    '[mcp_servers.remote]\nurl="https://example.invalid/mcp"\nauth="oauth"\n',
     '[mcp_servers.unsupported]\ncommand="/bin/unreviewed"\nunknown=true\n',
     '[model_providers.custom]\nbase_url="https://example.invalid"\n',
     '[shell_environment_policy]\ninclude_only=["PATH"]\n',
     '[projects."/unreviewed"]\ntrust_level="trusted"\n',
   ]) expect(v5(changed + tail)).not.toBe(v5(before));
+  // An admitted streamable HTTP row names a server, never a skill root, so it is
+  // non-discovery and cannot move the projection (HC-01441). The auth row above
+  // shows that a row outside the contract still moves the digest.
+  expect(v5(changed + '[mcp_servers.remote]\nurl="https://example.invalid/mcp"\n')).toBe(v5(before));
   expect(v5(changed.replace('enabled = false', 'enabled = true'))).not.toBe(v5(before));
   expect(v5(changed+'unknown=1\n')).not.toBe(v5(changed+'unknown=1.0\n'));
 });

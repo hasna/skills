@@ -47,10 +47,13 @@ test("unknown/malformed, hosted Apps, HTTP/auth and remote contracts remain full
     LOCAL + 'environment_id = "cloud-environment"\n',
     LOCAL + 'env_vars = [{name = "MODE", source = "remote"}]\n',
     LOCAL.replace("workflows", "codex_apps"), LOCAL.replace("workflows", "_codex_apps"),
-    '[mcp_servers.http]\nurl = "https://tools.invalid/mcp"\n',
     LOCAL.replace("30.00", "-1"), LOCAL + 'tools = {run = {output_token_limit = 0}}\n',
   ];
   for (const row of rows) { expect(v3(BASE + row)).not.toBe(v3(BASE)); expect(v3(BASE + row.replace("0.2.0", "0.2.1"))).not.toBe(v3(BASE)); }
+  // An admitted streamable HTTP row names a server, never a skill root, so it is
+  // non-discovery and cannot move the v3 digest (HC-01441). The rows above that
+  // mix transports or carry unknown fields stay bound.
+  expect(v3(BASE + '[mcp_servers.http]\nurl = "https://tools.invalid/mcp"\n')).toBe(v3(BASE));
 });
 
 test("lexical projection proves quoted and multiline table boundaries and keeps unsupported representations bound", () => {
@@ -78,9 +81,14 @@ test("v2-to-v3 proves legacy bytes then permits only newly irrelevant changes, w
   writeFileSync(f.configPath, changed);
   const options = () => ({ ...f, agent: "codex" as const, targetCodexVersion: 3 as const, reviewedPreimage: preimage, expectedPolicySha256: sha(policy), expectedSettingsSha256: sha(readFileSync(f.configPath, "utf8")) });
   expect(() => assertManagedAgentBridge("codex", f)).toThrow();
-  for (const bad of ['model_provider = "custom"\n' + changed, changed + '[plugins.extra]\nenabled = true\n', changed + '[mcp_servers.cloud]\nurl = "https://tools.invalid"\n']) {
+  for (const bad of ['model_provider = "custom"\n' + changed, changed + '[plugins.extra]\nenabled = true\n', changed + '[mcp_servers.cloud]\nurl = "https://tools.invalid"\nauth = "oauth"\n']) {
     writeFileSync(f.configPath, bad); expect(() => planAgentSettingsWitnessUpgrade(options())).toThrow("V3 contract"); expect(readFileSync(f.policyPath, "utf8")).toBe(policy);
   }
+  // An admitted streamable HTTP row names a server, never a skill root, so the
+  // upgrade still plans; the auth row above shows a row outside the contract
+  // stays refused (HC-01441).
+  writeFileSync(f.configPath, changed + '[mcp_servers.cloud]\nurl = "https://tools.invalid"\n');
+  expect(() => planAgentSettingsWitnessUpgrade(options())).not.toThrow();
   writeFileSync(f.configPath, changed); const plan = planAgentSettingsWitnessUpgrade(options());
   writeFileSync(preimage, before.replace("0.2.0", "0.2.2")); expect(() => applyAgentIntegration(plan)).toThrow();
   expect(readFileSync(f.policyPath, "utf8")).toBe(policy); writeFileSync(preimage, before);
