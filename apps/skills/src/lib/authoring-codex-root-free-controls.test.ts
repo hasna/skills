@@ -95,8 +95,15 @@ test("an MCP server's cwd and args are not discovery roots, so authoring under t
 
 test("MCP rows outside the local stdio contract keep the control unresolved", () => {
   for (const row of [
-    '[mcp_servers.remote]\nurl = "https://mcp.invalid/mcp"\n',
-    '[mcp_servers.remote]\nurl = "https://mcp.invalid/mcp"\nbearer_token_env_var = "TOKEN"\n',
+    // An HTTP row is admitted only under the exact streamable-HTTP contract:
+    // an unknown key, a mixed stdio/url row, a relative or credential-bearing
+    // URL and the reserved Apps name still refuse the whole control.
+    '[mcp_servers.remote]\nurl = "https://mcp.invalid/mcp"\nauth = "oauth"\n',
+    '[mcp_servers.remote]\nurl = "https://mcp.invalid/mcp"\ncommand = "server"\n',
+    '[mcp_servers.remote]\nurl = "mcp.invalid/mcp"\n',
+    '[mcp_servers.remote]\nurl = "https://user:pass@mcp.invalid/mcp"\n',
+    '[mcp_servers.remote]\nurl = " " \n',
+    '[mcp_servers.codex_apps]\nurl = "https://mcp.invalid/mcp"\n',
     '[mcp_servers.codex_apps]\ncommand = "codex-apps"\n',
     '[mcp_servers._codex_apps]\ncommand = "codex-apps"\n',
     '[mcp_servers.unknown]\ncommand = "server"\nskills_root = "/somewhere"\n',
@@ -104,12 +111,25 @@ test("MCP rows outside the local stdio contract keep the control unresolved", ()
     'mcp_servers = "not a table"\n',
     'mcp_servers = { broken = "row" }\n',
     // One unsupported row refuses the whole control, even beside fleet rows.
-    `${fleetServers}\n[mcp_servers.remote]\nurl = "https://mcp.invalid/mcp"\n`,
+    `${fleetServers}\n[mcp_servers.remote]\nurl = "https://mcp.invalid/mcp"\nauth = "oauth"\n`,
   ]) refused(fixture(row), 'unknown discovery controls have no root-exclusion adapter for "mcp_servers"');
   // The row count stays bounded like the other enumerated controls.
   const many = Array.from({ length: 513 }, (_, index) => `[mcp_servers.s${index}]\ncommand = "server"\n`).join("");
   refused(fixture(many), 'unknown discovery controls have no root-exclusion adapter for "mcp_servers"');
   allowed(fixture(Array.from({ length: 512 }, (_, index) => `[mcp_servers.s${index}]\ncommand = "server"\n`).join("")));
+});
+
+test("streamable HTTP MCP rows add no root: a url row is admitted beside stdio rows", () => {
+  // The measured fleet row (station12's upwork) is a URL only, with no
+  // command. It names a server to reach, never a filesystem path, so it cannot
+  // load a skill; the stdio rows beside it stay admitted as before.
+  allowed(fixture(`${fleetServers}\n[mcp_servers.upwork]\nurl = "https://mcp.invalid/upwork"\n`));
+  allowed(fixture('[mcp_servers.upwork]\nurl = "https://mcp.invalid/upwork"\nbearer_token_env_var = "UPWORK_TOKEN"\n'));
+  allowed(fixture('[mcp_servers.upwork]\nurl = "https://mcp.invalid/upwork"\nhttp_headers = { "X-Org" = "hasna" }\nenv_http_headers = { "X-Token" = "UPWORK_TOKEN" }\ntools = { search = { approval_mode = "approve" } }\n'));
+  // A malformed value or an unknown field still refuses that row, and with it
+  // the whole control.
+  refused(fixture('[mcp_servers.upwork]\nurl = "https://mcp.invalid/upwork"\nhttp_headers = { "X" = 1 }\n'), 'unknown discovery controls have no root-exclusion adapter for "mcp_servers"');
+  refused(fixture('[mcp_servers.upwork]\nurl = 42\n'), 'unknown discovery controls have no root-exclusion adapter for "mcp_servers"');
 });
 
 test("scalar [agents] settings add no root; agent roles and other values still refuse", () => {

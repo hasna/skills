@@ -247,10 +247,17 @@ test("a live hook keeps a semantic-cache binding current through the narrowed le
   // Strict callers are unchanged; the live hook accepts the ordinary rewrite.
   expect(() => verifyAgentDiscovery(next)).toThrow("Native discovery input changed");
   expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).not.toThrow();
-  for (const added of ['[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "/opt/foreign/stop"\n', '[plugins."foreign@market"]\nenabled = true\n', '[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\n']) {
+  for (const added of ['[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "/opt/foreign/stop"\n', '[plugins."foreign@market"]\nenabled = true\n']) {
     writeFileSync(f.config, `model = "gpt-5.2-codex"\n${f.settings}\n${added}`);
     expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).toThrow();
   }
+  // An admitted MCP row names a server, never a skill root, so an HTTP row is
+  // non-discovery exactly like an admitted stdio row and keeps the binding
+  // verifying (HC-01441). A row outside the contract is still bound and caught.
+  writeFileSync(f.config, `model = "gpt-5.2-codex"\n${f.settings}\n[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\n`);
+  expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).not.toThrow();
+  writeFileSync(f.config, `model = "gpt-5.2-codex"\n${f.settings}\n[mcp_servers.remote]\nurl = "https://mcp.example.invalid/a"\nauth = "oauth"\n`);
+  expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).toThrow();
   // A disable rule removed from config is still caught by the cache witness.
   writeFileSync(f.config, `model = "gpt-5.2-codex"\n`);
   expect(() => verifyAgentDiscovery(next, undefined, undefined, undefined, live())).toThrow();

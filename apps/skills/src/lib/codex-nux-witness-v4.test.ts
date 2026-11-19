@@ -26,9 +26,12 @@ test("non-uint32 and integer-looking float state never receive the omission", ()
 });
 test("discovery and instruction controls stay bound during a count update", () => {
   const before = witness(inline("3"));
-  for (const tail of ['[plugins.test]\nenabled = true\n', '[mcp_servers.remote]\nurl = "https://example.invalid/mcp"\n', '[hooks]\nenabled = false\n', '[model_providers.custom]\nbase_url = "https://example.invalid"\n']) {
+  for (const tail of ['[plugins.test]\nenabled = true\n', '[hooks]\nenabled = false\n', '[model_providers.custom]\nbase_url = "https://example.invalid"\n']) {
     expect(witness(inline("4")+tail)).not.toBe(before);
   }
+  // An admitted streamable HTTP row names a server, never a skill root, so it is
+  // non-discovery and cannot move the witness (HC-01441).
+  expect(witness(inline("4")+'[mcp_servers.remote]\nurl = "https://example.invalid/mcp"\n')).toBe(witness(inline("4")));
 });
 test("string-contained header and assignment lookalikes are not counter state", () => {
   const text = 'lookalike = """\n[tui.model_availability_nux]\ncount = 3\n"""\n'+inline("3");

@@ -134,7 +134,9 @@ test("(b) command handlers keep the whole-review check", () => {
 
 test("(b) a hook server must be a configured local stdio MCP server", () => {
   refused(station({ noServer: true }), "plugin hook MCP server is not a configured local stdio server");
-  refused(station({ urlServer: true }), 'unknown discovery controls have no root-exclusion adapter for "mcp_servers"');
+  // An HTTP row is an admitted non-discovery control (HC-01441), so the hook
+  // check itself must refuse it: a hook server has to be a local stdio server.
+  refused(station({ urlServer: true }), "plugin hook MCP server is not a configured local stdio server");
 });
 
 test("(c) inline manifest hooks are read and verified like a hook file", () => {
